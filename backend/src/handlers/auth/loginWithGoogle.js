@@ -75,8 +75,6 @@ const loginWithGoogle = async (req, res) => {
       isNewUser = true;
     }
 
-    // Since we are relying natively on Firebase tokens across the app (reverted architecture),
-    // we don't generate custom JWTs here. The frontend already possesses its Firebase tokens!
     return res.status(200).json({
       message: "Google login successful",
       userId: user.userId,
@@ -87,7 +85,7 @@ const loginWithGoogle = async (req, res) => {
     });
   } catch (error) {
     console.error('Google Auth Error:', error);
-    return res.status(500).json({ error: 'GOOGLE_AUTH_FAILED' });
+    return res.status(500).json({ error: 'GOOGLE_AUTH_FAILED', details: error.message, stack: error.stack });
   }
 };
 
