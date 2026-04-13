@@ -24,3 +24,19 @@ region = "us-east-1"
 confirm_changeset = false
 capabilities = "CAPABILITY_IAM"
 image_repositories = []
+
+[staging.build.parameters]
+cached = true
+parallel = true
+
+[staging.deploy.parameters]
+stack_name = "qlue-season8-staging"
+resolve_s3 = true
+s3_prefix = "qlue-season8-staging"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+image_repositories = []
+
+[staging.global.parameters]
+region = "us-east-1"

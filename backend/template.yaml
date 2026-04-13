@@ -19,12 +19,26 @@ Globals:
         CONCEPT_STATES_TABLE: !Ref ConceptStatesTable
         WS_CONNECTIONS_TABLE: !Ref WSConnectionsTable
         NOTIFICATIONS_TABLE: !Ref NotificationsTable
+        USERS_TABLE_V2: !Ref UsersTableV2
+        RESUMES_TABLE_V2: !Ref ResumesTableV2
+        SESSIONS_TABLE_V2: !Ref SessionsTableV2
+        TRANSCRIPTS_TABLE_V2: !Ref TranscriptsTableV2
+        FEEDBACK_TABLE_V2: !Ref FeedbackTableV2
+        WS_CONNECTIONS_TABLE_V2: !Ref WSConnectionsTableV2
+        NOTIFICATIONS_TABLE_V2: !Ref NotificationsTableV2
+        FIREBASE_SECRET_ID: !Ref FirebaseServiceAccountSecret
+        BEDROCK_SECRET_ID: !Ref BedrockConfigSecret
+        SCRAPER_SECRET_ID: !Ref ScraperApiKeySecret
+        FCM_SECRET_ID: !Ref FcmServerKeySecret
         RESUMES_BUCKET: !Ref ResumesBucket
         SCRAPED_CONTENT_BUCKET: !Ref ScrapedContentBucket
         FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
         WEBSOCKET_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
         BEDROCK_MODEL_ID: 'nvidia.nemotron-super-3-120b'
         ALLOWED_VOICES: "Tiffany,Ruth,Joanna,Matthew,Stephen"
+
+Conditions:
+  IsProd: !Equals [ !Ref "AWS::StackName", "qlue-season8-prod" ]
 
 Resources:
   # ==============================================================================
@@ -289,6 +303,210 @@ Resources:
           Projection:
             ProjectionType: ALL
 
+  UsersTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-users-v2
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: profileKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: profileKey
+          KeyType: RANGE
+
+  ResumesTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-resumes-v2
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: resumeKey
+          AttributeType: S
+        - AttributeName: activeResumeKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: resumeKey
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: ActiveResumeIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: activeResumeKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  SessionsTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-sessions-v2
+      BillingMode: PAY_PER_REQUEST
+      TableClass: STANDARD_INFREQUENT_ACCESS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: sessionKey
+          AttributeType: S
+        - AttributeName: startedAt
+          AttributeType: S
+        - AttributeName: statusKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: sessionKey
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: UserSessionTimeIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: startedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: SessionStatusIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: statusKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  TranscriptsTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-transcripts-v2
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: turnKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+        - AttributeName: turnKey
+          KeyType: RANGE
+
+  FeedbackTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-feedback-v2
+      BillingMode: PAY_PER_REQUEST
+      TableClass: STANDARD_INFREQUENT_ACCESS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: feedbackKey
+          AttributeType: S
+        - AttributeName: feedbackStatus
+          AttributeType: S
+        - AttributeName: feedbackStatusKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+        - AttributeName: feedbackKey
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: FeedbackStatusIndex
+          KeySchema:
+            - AttributeName: feedbackStatus
+              KeyType: HASH
+            - AttributeName: feedbackStatusKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  NotificationsTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-notifications-v2
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: notificationKey
+          AttributeType: S
+        - AttributeName: unreadKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: notificationKey
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: UnreadNotificationIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: unreadKey
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  WSConnectionsTableV2:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-ws-connections-v2
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: connectionKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: connectionKey
+          KeyType: RANGE
+
   # ==============================================================================
   # S3 BUCKETS
   # ==============================================================================
@@ -487,19 +705,19 @@ Resources:
   FirebaseServiceAccountSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: qlue/firebase-service-account
+      Name: !If [ IsProd, "qlue/firebase-service-account", !Sub "qlue/firebase-service-account-${AWS::StackName}" ]
   BedrockConfigSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: qlue/bedrock-config
+      Name: !If [ IsProd, "qlue/bedrock-config", !Sub "qlue/bedrock-config-${AWS::StackName}" ]
   ScraperApiKeySecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: qlue/scraper-api-key
+      Name: !If [ IsProd, "qlue/scraper-api-key", !Sub "qlue/scraper-api-key-${AWS::StackName}" ]
   FcmServerKeySecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: qlue/fcm-server-key
+      Name: !If [ IsProd, "qlue/fcm-server-key", !Sub "qlue/fcm-server-key-${AWS::StackName}" ]
 
   # ==============================================================================
   # LAMBDA FUNCTIONS
@@ -516,6 +734,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -536,6 +756,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -556,6 +778,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -576,6 +800,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -596,6 +822,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -616,6 +844,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -636,6 +866,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -656,6 +888,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -676,6 +910,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -696,6 +932,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref FirebaseServiceAccountSecret
 
@@ -716,6 +954,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
 
   # ========= RESUME =========
   GeneratePresignedUrlFunction:
@@ -735,6 +975,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -756,7 +998,11 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
         - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
+        - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
         - Statement:
@@ -797,6 +1043,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -817,6 +1065,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -837,6 +1087,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -858,7 +1110,11 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
         - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
+        - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -880,6 +1136,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -900,6 +1158,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ResumesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTableV2
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
 
@@ -920,11 +1180,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -947,11 +1212,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -974,11 +1244,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1001,11 +1276,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1028,11 +1308,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1058,11 +1343,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['lambda:InvokeFunction'], Resource: !GetAtt TriggerFeedbackGenerationFunction.Arn }]
@@ -1090,12 +1380,18 @@ Resources:
             BatchSize: 1
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
@@ -1119,6 +1415,7 @@ Resources:
       Timeout: 10
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
 
@@ -1132,6 +1429,7 @@ Resources:
       Timeout: 10
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
 
   SendTextHandlerFunction:
@@ -1147,12 +1445,18 @@ Resources:
           FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTableV2 }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
@@ -1174,6 +1478,7 @@ Resources:
       Timeout: 10
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
 
   ErrorHandlerFunction:
@@ -1185,6 +1490,7 @@ Resources:
       Timeout: 10
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
 
   # ========= FEEDBACK =========
@@ -1202,11 +1508,16 @@ Resources:
             Topic: !Ref FeedbackTriggerTopic
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1228,11 +1539,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1254,11 +1570,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1280,11 +1601,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1306,11 +1632,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1332,11 +1663,16 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTableV2 }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
@@ -1359,7 +1695,9 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
   GetScoreTrendsFunction:
     Type: AWS::Serverless::Function
@@ -1377,6 +1715,7 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
   GetModuleStatsFunction:
@@ -1395,6 +1734,7 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
   GetSessionHistoryFunction:
@@ -1413,6 +1753,7 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
   GetSessionDetailFunction:
@@ -1431,7 +1772,9 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTableV2 }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
   GetTranscriptFunction:
@@ -1450,6 +1793,7 @@ Resources:
             RestApiId: !Ref RestApi
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTableV2 }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
   # ========= SCRAPER =========
