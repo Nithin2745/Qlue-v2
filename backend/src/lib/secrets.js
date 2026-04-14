@@ -54,14 +54,14 @@ async function getFirebaseServiceAccount() {
   if (process.env.MOCK_FIREBASE_SERVICE_ACCOUNT) {
     return process.env.MOCK_FIREBASE_SERVICE_ACCOUNT;
   }
-  return getSecret('qlue/firebase-service-account');
+  return getSecret(process.env.FIREBASE_SECRET_ID || 'qlue/firebase-service-account');
 }
 
 async function getBedrockConfig() {
   if (process.env.MOCK_BEDROCK_CONFIG) {
     return process.env.MOCK_BEDROCK_CONFIG;
   }
-  return getSecret('qlue/bedrock-config');
+  return getSecret(process.env.BEDROCK_SECRET_ID || 'qlue/bedrock-config');
 }
 
 async function getScraperApiKey() {
@@ -69,14 +69,14 @@ async function getScraperApiKey() {
   if (envKey) {
     return envKey;
   }
-  return getSecret('qlue/scraper-api-key');
+  return getSecret(process.env.SCRAPER_SECRET_ID || 'qlue/scraper-api-key');
 }
 
 async function getFCMServerKey() {
   if (process.env.MOCK_FCM_SERVER_KEY) {
     return process.env.MOCK_FCM_SERVER_KEY;
   }
-  return getSecret('qlue/fcm-server-key');
+  return getSecret(process.env.FCM_SECRET_ID || 'qlue/fcm-server-key');
 }
 
 module.exports = {
