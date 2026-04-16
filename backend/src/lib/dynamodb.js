@@ -15,7 +15,7 @@ const {
   BatchGetCommand
 } = require('@aws-sdk/lib-dynamodb');
 
-const rawClient = new DynamoDBClient({ region: process.env.AWS_REGION || 'ap-south-1' });
+const rawClient = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(rawClient, {
   marshallOptions: {
     removeUndefinedValues: true,

@@ -3,7 +3,7 @@
  */
 const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly');
 
-const polly = new PollyClient({ region: process.env.AWS_REGION || 'ap-south-1' });
+const polly = new PollyClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 /**
  * Gets an estimated duration in ms for text
