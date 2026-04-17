@@ -1,1 +1,1126 @@
-# Qlue backend SAM template file
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Qlue AI-powered voice interview simulation mobile app.
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Layers:
+      - !Ref QlueSharedLayer
+    Environment:
+      Variables:
+        USERS_TABLE: !Ref UsersTable
+        RESUMES_TABLE: !Ref ResumesTable
+        SESSIONS_TABLE: !Ref SessionsTable
+        TRANSCRIPTS_TABLE: !Ref TranscriptsTable
+        FEEDBACK_TABLE: !Ref FeedbackTable
+        CONCEPT_STATES_TABLE: !Ref ConceptStatesTable
+        WS_CONNECTIONS_TABLE: !Ref WSConnectionsTable
+        NOTIFICATIONS_TABLE: !Ref NotificationsTable
+        RESUMES_BUCKET: !Ref ResumesBucket
+        SCRAPED_CONTENT_BUCKET: !Ref ScrapedContentBucket
+        FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
+        WEBSOCKET_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+        BEDROCK_MODEL_ID: 'NVIDIA Nemotron 3 Super 120B A12B'
+
+Resources:
+  # ==============================================================================
+  # DYNAMODB TABLES
+  # ==============================================================================
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-users
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+
+  ResumesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-resumes
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: resumeId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: uploadedAt
+          AttributeType: N
+      KeySchema:
+        - AttributeName: resumeId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_UserIdUploadedAt
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: uploadedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-sessions
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: startedAt
+          AttributeType: N
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_UserIdStartedAt
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: startedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI_UserIdStatus
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  TranscriptsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-transcripts
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: transcriptId
+          AttributeType: S
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: turnIndex
+          AttributeType: N
+      KeySchema:
+        - AttributeName: transcriptId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_SessionIdTurnIndex
+          KeySchema:
+            - AttributeName: sessionId
+              KeyType: HASH
+            - AttributeName: turnIndex
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  FeedbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-feedback
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: feedbackId
+          AttributeType: S
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: generatedAt
+          AttributeType: N
+      KeySchema:
+        - AttributeName: feedbackId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_SessionId
+          KeySchema:
+            - AttributeName: sessionId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI_UserIdGeneratedAt
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: generatedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ConceptStatesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-concept-states
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: conceptId
+          AttributeType: S
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: concept
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: websiteUrl
+          AttributeType: S
+      KeySchema:
+        - AttributeName: conceptId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_SessionIdConcept
+          KeySchema:
+            - AttributeName: sessionId
+              KeyType: HASH
+            - AttributeName: concept
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: GSI_UserIdWebsiteUrl
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: websiteUrl
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  WSConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-ws-connections
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: connectionId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: isActive
+          AttributeType: S
+      KeySchema:
+        - AttributeName: connectionId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_UserIdIsActive
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: isActive
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  NotificationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: qlue-notifications
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: notificationId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: sentAt
+          AttributeType: N
+      KeySchema:
+        - AttributeName: notificationId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_UserIdSentAt
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: sentAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # ==============================================================================
+  # S3 BUCKETS
+  # ==============================================================================
+  ResumesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: ['PUT']
+            AllowedOrigins: ['*']
+
+  ScrapedContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDelete
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ==============================================================================
+  # API GATEWAYS
+  # ==============================================================================
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      BinaryMediaTypes:
+        - "application/octet-stream"
+        - "audio/pcm"
+        - "multipart/form-data"
+      Cors:
+        AllowMethods: "'OPTIONS,GET,POST,PUT,DELETE'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: FirebaseAuthorizer
+        Authorizers:
+          FirebaseAuthorizer:
+            FunctionPayloadType: TOKEN
+            FunctionArn: !GetAtt ValidateTokenFunction.Arn
+            Identity:
+              Header: Authorization
+
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: QlueWebSocket
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.type"
+
+  WebSocketDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      - DefaultRoute
+    Properties:
+      ApiId: !Ref WebSocketApi
+
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: prod
+      ApiId: !Ref WebSocketApi
+      DeploymentId: !Ref WebSocketDeployment
+      AutoDeploy: true
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $connect
+      Target: !Join ['/', ['integrations', !Ref ConnectIntegration]]
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $disconnect
+      Target: !Join ['/', ['integrations', !Ref DisconnectIntegration]]
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $default
+      Target: !Join ['/', ['integrations', !Ref DefaultIntegration]]
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectHandlerFunction.Arn}/invocations
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DisconnectHandlerFunction.Arn}/invocations
+  DefaultIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SendTextHandlerFunction.Arn}/invocations
+
+  ConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ConnectHandlerFunction.Arn
+      Principal: apigateway.amazonaws.com
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt DisconnectHandlerFunction.Arn
+      Principal: apigateway.amazonaws.com
+  DefaultPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt SendTextHandlerFunction.Arn
+      Principal: apigateway.amazonaws.com
+
+  # ==============================================================================
+  # LAMBDA LAYER
+  # ==============================================================================
+  QlueSharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: src/lib/
+      CompatibleRuntimes:
+        - nodejs20.x
+      RetentionPolicy: Retain
+
+  # ==============================================================================
+  # SNS TOPICS
+  # ==============================================================================
+  FeedbackTriggerTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: qlue-feedback-trigger
+
+  # ==============================================================================
+  # SECRETS
+  # ==============================================================================
+  FirebaseServiceAccountSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: qlue/firebase-service-account
+  BedrockConfigSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: qlue/bedrock-config
+  ScraperApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: qlue/scraper-api-key
+  FcmServerKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: qlue/fcm-server-key
+
+  # ==============================================================================
+  # LAMBDA FUNCTIONS
+  # ==============================================================================
+
+  # ========= AUTH =========
+  ValidateTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/validateToken/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  RegisterUserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/registerUser/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  LoginUserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/loginUser/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  LoginWithGoogleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/loginWithGoogle/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  RefreshTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/refreshToken/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  LogoutUserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/logoutUser/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  DeleteAccountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/deleteAccount/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  GetUserProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/getUserProfile/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  UpdateUserProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: auth/updateUserProfile/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SecretsManagerReadPolicy:
+            SecretArn: !Ref FirebaseServiceAccountSecret
+
+  # ========= RESUME =========
+  GeneratePresignedUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/generatePresignedUrl/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  ProcessResumeUploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/processResumeUpload/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 1024
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  GetResumeListFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/getResumeList/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  GetResumeDetailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/getResumeDetail/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  UpdateResumeParsedDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/updateResumeParsedData/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  DeleteResumeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/deleteResume/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  SetActiveResumeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/setActiveResume/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  ValidateResumeHashFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resume/validateResumeHash/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResumesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ResumesBucket
+
+  # ========= INTERVIEW =========
+  InitializeSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: interview/initializeSession/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+
+  ProcessUserInputFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: interview/processUserInput/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+
+  GenerateQuestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: interview/generateQuestion/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+
+  ManageContextWindowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: interview/manageContextWindow/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+
+  ControlTurnFlowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: interview/controlTurnFlow/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+
+  TerminateSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: interview/terminateSession/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+
+  # ========= WEBSOCKET =========
+  ConnectHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket/connectHandler/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+
+  DisconnectHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket/disconnectHandler/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+
+  SendTextHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket/sendTextHandler/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+
+  StateUpdateHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket/stateUpdateHandler/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+
+  ErrorHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket/errorHandler/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+
+  # ========= FEEDBACK =========
+  TriggerFeedbackGenerationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: feedback/triggerFeedbackGeneration/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Events:
+        SNSTrigger:
+          Type: SNS
+          Properties:
+            Topic: !Ref FeedbackTriggerTopic
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FcmServerKeySecret }
+
+  AnalyzeTranscriptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: feedback/analyzeTranscript/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 1024
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FcmServerKeySecret }
+
+  ComputeModuleScoresFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: feedback/computeModuleScores/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FcmServerKeySecret }
+
+  GenerateFeedbackReportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: feedback/generateFeedbackReport/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 1024
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FcmServerKeySecret }
+
+  StoreFeedbackReportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: feedback/storeFeedbackReport/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FcmServerKeySecret }
+
+  SendFeedbackNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: feedback/sendFeedbackNotification/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref NotificationsTable }
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - SecretsManagerReadPolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FcmServerKeySecret }
+
+  # ========= DASHBOARD =========
+  GetDashboardSummaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dashboard/getDashboardSummary/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  GetScoreTrendsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dashboard/getScoreTrends/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  GetModuleStatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dashboard/getModuleStats/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  GetSessionHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dashboard/getSessionHistory/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  GetSessionDetailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dashboard/getSessionDetail/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  GetTranscriptFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dashboard/getTranscript/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 256
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  # ========= SCRAPER =========
+  FetchAndCleanContentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: scraper/fetchAndCleanContent/index.handler
+      CodeUri: src/handlers/
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - SecretsManagerReadPolicy: { SecretArn: !Ref ScraperApiKeySecret }
+
+  # ==============================================================================
+  # CLOUDWATCH ALARMS
+  # ==============================================================================
+  LambdaErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "High Lambda Error Rate"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref FeedbackTriggerTopic
+
+  DynamoDBThrottledRequestsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "DynamoDB Throttling detected"
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref FeedbackTriggerTopic
+
+  APIGateway5xxErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "API Gateway 5XX errors"
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref FeedbackTriggerTopic
+
+  WebSocketConnectionDropRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "API GW Websocket connection drops"
+      Namespace: AWS/ApiGateway
+      MetricName: ConnectError
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+
+  BedrockInvocationLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Bedrock Invocation Latency > 30s"
+      Namespace: AWS/Bedrock
+      MetricName: InvocationLatency
+      Statistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+
+  PollySynthesisFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Polly Synthesis Errors"
+      Namespace: AWS/Polly
+      MetricName: 5XXError
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
