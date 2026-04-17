@@ -1,13 +1,42 @@
 const { docClient } = require('../lib/dynamodb');
 const { UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
+const { CloudWatchClient, PutMetricDataCommand } = require("@aws-sdk/client-cloudwatch");
+const { getSession } = require('./session');
+
+const cloudwatch = new CloudWatchClient({});
 
 const CONCEPTS_TABLE = process.env.CONCEPTS_TABLE_NAME || 'Concepts';
+const SESSIONS_TABLE_V2 = process.env.SESSIONS_TABLE_V2;
 
 const CONCEPT_STATES = {
     UNADDRESSED: 'UNADDRESSED',
     TUTORED: 'TUTORED',
     MASTERED: 'MASTERED'
 };
+
+async function emitV2WriteFailureMetric(tableName) {
+    try {
+        await cloudwatch.send(new PutMetricDataCommand({
+            Namespace: "Qlue/DatabaseMigration",
+            MetricData: [{
+                MetricName: "v2_write_failure",
+                Dimensions: [{ Name: "TableName", Value: tableName }],
+                Value: 1,
+                Unit: "Count"
+            }]
+        }));
+    } catch (e) {
+        console.error("Failed to emit CloudWatch metric", e);
+    }
+}
+
+async function dualWrite(oldWrite, newWrite, table, context) {
+    await oldWrite();
+    newWrite().catch(async (err) => {
+        console.error('V2_WRITE_FAILED', { table, ...context, error: err.message, stack: err.stack });
+        await emitV2WriteFailureMetric(table);
+    });
+}
 
 /**
  * Updates or creates a concept state in DynamoDB.
@@ -27,8 +56,32 @@ async function updateConceptState(sessionId, conceptId, state, attemptIncrement 
         ReturnValues: 'ALL_NEW'
     });
     
-    const res = await docClient.send(command);
-    return res.Attributes;
+    let oldWriteResponse;
+    const oldWrite = async () => {
+        oldWriteResponse = await docClient.send(command);
+    };
+
+    const newWrite = async () => {
+        if (!SESSIONS_TABLE_V2) return;
+        const session = await getSession(sessionId);
+        if (!session) return;
+        
+        let attempts = (oldWriteResponse?.Attributes?.attempts) || attemptIncrement;
+        
+        await docClient.send(new UpdateCommand({
+            TableName: SESSIONS_TABLE_V2,
+            Key: { userId: session.userId, sessionKey: `SESSION#${sessionId}` },
+            UpdateExpression: 'SET conceptStates = if_not_exists(conceptStates, :emptyMap), conceptStates.#cid = :conceptObj',
+            ExpressionAttributeNames: { '#cid': conceptId },
+            ExpressionAttributeValues: { 
+                ':emptyMap': {}, 
+                ':conceptObj': { state: state, attempts: attempts } 
+            }
+        }));
+    };
+
+    await dualWrite(oldWrite, newWrite, 'SessionsTableV2', { sessionId, conceptId });
+    return oldWriteResponse?.Attributes;
 }
 
 /**
