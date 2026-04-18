@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
@@ -15,16 +16,15 @@ void main() async {
   await dotenv.load(fileName: ".env");
   await Firebase.initializeApp(
     options: FirebaseOptions(
-      apiKey: dotenv.get('FIREBASE_API_KEY', fallback: 'AIzaSyAz83QyHgC5rv-8Zx2LOssyUBY7cmz3sYI'),
-      appId: dotenv.get('FIREBASE_APP_ID', fallback: '1:425417594832:web:c9ea5413c99113eb844bd5'),
-      messagingSenderId: dotenv.get('MESSAGING_SENDER_ID', fallback: '425417594832'),
-      projectId: dotenv.get('FIREBASE_PROJECT_ID', fallback: 'qlue-backend-2c0c7'),
-      storageBucket: '${dotenv.get('FIREBASE_PROJECT_ID', fallback: 'qlue-backend-2c0c7')}.firebasestorage.app',
-      measurementId: dotenv.get('MEASUREMENT_ID', fallback: 'G-FYGDSCV1C7'),
+      apiKey: dotenv.env['FIREBASE_API_KEY'] ?? '',
+      appId: dotenv.env['FIREBASE_APP_ID'] ?? '',
+      messagingSenderId: dotenv.env['MESSAGING_SENDER_ID'] ?? '',
+      projectId: dotenv.env['FIREBASE_PROJECT_ID'] ?? '',
+      measurementId: dotenv.env['MEASUREMENT_ID'],
     ),
   );
   await GoogleSignIn.instance.initialize(
-    clientId: dotenv.get('GOOGLE_WEB_CLIENT_ID', fallback: '425417594832-ka8njkac1kd9h7sut8ojjmqg3jed5l7t.apps.googleusercontent.com'),
+    clientId: kIsWeb ? '425417594832-ka8njkac1kd9h7sut8ojjmqg3jed5l7t.apps.googleusercontent.com' : null,
   );
   
   runApp(const QlueApp());

@@ -34,10 +34,22 @@ WORK_ALLOCATION.md
 
 Qlue_v2_Resume_Module_Prompt.docx
 resume_prompt_extracted.txt
+# Firebase/Sensitive
 **/google-services.json
 **/GoogleService-Info.plist
 **/key.properties
 **/local.properties
 **/*.keystore
 **/*.jks
-backend/serverAccountKey.json
+**/serverAccountKey.json
+**/service-account-local.json
+**/*service-account*.json
+**/*serverAccountKey*.json
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+
+# Debugging
+backend/debug-*
+debug-output*

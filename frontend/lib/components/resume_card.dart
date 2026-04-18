@@ -32,9 +32,11 @@ class _ResumeCardState extends State<ResumeCard> with SingleTickerProviderStateM
   Widget build(BuildContext context) {
     final t = AppThemeColors.of(context);
     bool isParsed = widget.resume.status == ResumeStatus.parsed;
-    bool isParsing = widget.resume.status == ResumeStatus.parsing;
+    bool isParsing = widget.resume.status == ResumeStatus.parsing || widget.resume.status == ResumeStatus.uploading;
     bool isFailed = widget.resume.status == ResumeStatus.failed;
+    
     String format = widget.resume.fileName.split('.').last.toUpperCase();
+    String sizeStr = "${(widget.resume.fileSize / 1024 / 1024).toStringAsFixed(1)} MB";
     Color headerColor = format == "PDF" ? const Color(0xFFEF4444) : const Color(0xFF3B82F6);
 
     return GestureDetector(
@@ -66,7 +68,7 @@ class _ResumeCardState extends State<ResumeCard> with SingleTickerProviderStateM
                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(format, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white)),
                     const SizedBox(height: 1),
-                    Text("${(widget.resume.fileSize / 1024).toStringAsFixed(1)} KB", style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.7))),
+                    Text(sizeStr, style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.7))),
                   ]),
                 ]),
                 if (isParsed) Container(
@@ -92,8 +94,8 @@ class _ResumeCardState extends State<ResumeCard> with SingleTickerProviderStateM
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(widget.resume.fileName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: t.text)),
                 const SizedBox(height: 4),
-                Text("Uploaded ${widget.resume.uploadedAt != null ? DateTime.fromMillisecondsSinceEpoch(widget.resume.uploadedAt!).toLocal().toString().split(' ')[0] : 'Unknown'}", style: TextStyle(fontSize: 12, color: t.textTertiary)),
-                if (isParsed && widget.resume.parsedData?.skills != null && widget.resume.parsedData!.skills!.isNotEmpty)
+                Text("Uploaded recently", style: TextStyle(fontSize: 12, color: t.textTertiary)),
+                if (isParsed && widget.resume.parsedData != null && widget.resume.parsedData!.skills != null && widget.resume.parsedData!.skills!.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 6.0),
                     child: Wrap(spacing: 6.0, runSpacing: 6.0, children: [
