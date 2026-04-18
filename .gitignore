@@ -40,3 +40,4 @@ resume_prompt_extracted.txt
 **/local.properties
 **/*.keystore
 **/*.jks
+backend/serverAccountKey.json
