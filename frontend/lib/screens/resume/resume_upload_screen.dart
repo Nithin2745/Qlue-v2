@@ -11,7 +11,6 @@ import '../../context/resume_provider.dart';
 import '../../components/glass_card.dart';
 import '../../components/spectral_background.dart';
 import '../../components/confirmation_dialog.dart';
-import 'resume_detail_screen.dart';
 
 class ResumeUploadScreen extends StatefulWidget {
   const ResumeUploadScreen({super.key});
@@ -95,6 +94,149 @@ class _ResumeUploadScreenState extends State<ResumeUploadScreen> {
     if (confirmed == true && mounted) {
       context.read<ResumeProvider>().deleteResume(resumeId);
     }
+  }
+
+  void _showParsedPreview(ResumeModel r) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final t = AppThemeColors.of(ctx);
+        return GlassCard(
+          margin: const EdgeInsets.only(top: 80),
+          padding: const EdgeInsets.all(24),
+          borderRadius: 32,
+          hasMetallicBorder: true,
+          child: Column(
+            children: [
+               Container(width: 40, height: 4, decoration: BoxDecoration(color: t.border.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(2))),
+               const SizedBox(height: 24),
+               Row(
+                 children: [
+                   Container(
+                     padding: const EdgeInsets.all(12),
+                     decoration: BoxDecoration(color: t.primary.withValues(alpha: 0.1), shape: BoxShape.circle),
+                     child: Icon(FeatherIcons.fileText, color: t.primary, size: 24),
+                   ),
+                   const SizedBox(width: 16),
+                   Expanded(
+                     child: Column(
+                       crossAxisAlignment: CrossAxisAlignment.start,
+                       children: [
+                         Text("Resume Profile", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: t.text)),
+                         Text(r.fileName, style: TextStyle(fontSize: 14, color: t.textSecondary)),
+                       ],
+                     )
+                   ),
+                   IconButton(icon: Icon(FeatherIcons.x, color: t.textTertiary), onPressed: () => Navigator.pop(ctx))
+                 ],
+               ),
+               const SizedBox(height: 24),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    children: [
+                      if (r.parsedData?.name != null)
+                        _buildDetailSection("Candidate Name", r.parsedData!.name!, t),
+                      
+                      if (r.parsedData?.skills != null && r.parsedData!.skills!.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        _buildDetailSection("Skills & Technologies", "", t, 
+                          content: Wrap(
+                            spacing: 8, runSpacing: 8,
+                            children: r.parsedData!.skills!.map((s) => _buildPill(s, t)).toList()
+                          )
+                        ),
+                      ],
+
+                      if (r.parsedData?.workExperience != null && r.parsedData!.workExperience!.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        _buildDetailSection("Work Experience", "", t,
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: r.parsedData!.workExperience!.map((exp) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(exp.role ?? "Role", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: t.text)),
+                                  Text(exp.company ?? "Company", style: TextStyle(fontSize: 12, color: t.primary)),
+                                  if (exp.duration != null)
+                                    Text(exp.duration!, style: TextStyle(fontSize: 11, color: t.textTertiary)),
+                                ],
+                              ),
+                            )).toList(),
+                          )
+                        ),
+                      ],
+
+                      if (r.parsedData?.projects != null && r.parsedData!.projects!.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        _buildDetailSection("Key Projects", "", t,
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: r.parsedData!.projects!.map((proj) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(proj.name ?? "Project", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: t.text)),
+                                  if (proj.description != null)
+                                    Text(proj.description!, style: TextStyle(fontSize: 12, color: t.textSecondary)),
+                                ],
+                              ),
+                            )).toList(),
+                          )
+                        ),
+                      ],
+
+                      if (r.parsedData?.education != null && r.parsedData!.education!.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        _buildDetailSection("Education", "", t,
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: r.parsedData!.education!.map((edu) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(edu.degree ?? "Degree", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: t.text)),
+                                  Text(edu.institution ?? "Institution", style: TextStyle(fontSize: 12, color: t.textSecondary)),
+                                ],
+                              ),
+                            )).toList(),
+                          )
+                        ),
+                      ],
+                    ],
+                  ),
+                )
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  Widget _buildDetailSection(String title, String body, AppThemeColors t, {Widget? content}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: t.primary, letterSpacing: 1)),
+        const SizedBox(height: 12),
+        if (content != null) content
+        else Text(body, style: TextStyle(fontSize: 15, color: t.textSecondary, height: 1.6)),
+      ],
+    );
+  }
+
+  Widget _buildPill(String text, AppThemeColors t) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(color: t.bgSecondary, borderRadius: BorderRadius.circular(12), border: Border.all(color: t.border.withValues(alpha: 0.5))),
+      child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: t.textSecondary)),
+    );
   }
 
   @override
@@ -225,14 +367,7 @@ class _ResumeUploadScreenState extends State<ResumeUploadScreen> {
 
                       final resume = resumes[_isUploading ? index - 1 : index];
                       return GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ResumeDetailScreen(resumeId: resume.resumeId),
-                            ),
-                          );
-                        },
+                        onTap: () => _showParsedPreview(resume),
                         child: GlassCard(
                           margin: const EdgeInsets.only(bottom: 16),
                           padding: const EdgeInsets.all(20),
