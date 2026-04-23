@@ -207,7 +207,7 @@ class ResumeProvider extends ChangeNotifier {
   void _startPolling(String resumeId) {
     if (_pollingTimers.containsKey(resumeId)) return;
 
-    _pollingTimers[resumeId] = Timer.periodic(const Duration(seconds: 5), (timer) async {
+    _pollingTimers[resumeId] = Timer.periodic(const Duration(seconds: 2), (timer) async {
       final resume = await fetchResumeDetail(resumeId);
       if (resume != null) {
         if (resume.status == ResumeStatus.parsed || resume.status == ResumeStatus.failed) {

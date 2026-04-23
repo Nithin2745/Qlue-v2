@@ -87,8 +87,8 @@ exports.handler = async (event, context) => {
  */
 async function processAsync(resumeId, userId, s3Key) {
     try {
-        // Wait a moment to ensure the S3 object is fully available
-        await sleep(1500);
+        // Reduced initial wait - S3 is strongly consistent now
+        await sleep(500);
         
         // Start Textract Async Analysis
         const startCommand = new StartDocumentAnalysisCommand({
@@ -101,15 +101,20 @@ async function processAsync(resumeId, userId, s3Key) {
 
         let jobStatus = 'IN_PROGRESS';
         let attempts = 0;
-        const maxAttempts = 60; // Increased to 5 minutes max
+        const maxAttempts = 100; // Increased attempts but decreased interval
 
         while (jobStatus === 'IN_PROGRESS' && attempts < maxAttempts) {
-            await sleep(5000);
+            // High-frequency polling (every 1.5s) for snappier experience for small PDFs
+            await sleep(1500);
             attempts++;
             const getCommand = new GetDocumentAnalysisCommand({ JobId: jobId });
             const statusRes = await textractClient.send(getCommand);
             jobStatus = statusRes.JobStatus;
-            console.info(`Textract status for ${resumeId}: ${jobStatus} (attempt ${attempts})`);
+            
+            // Log only every 5th attempt to keep logs clean
+            if (attempts % 5 === 0) {
+                console.info(`Textract status for ${resumeId}: ${jobStatus} (attempt ${attempts})`);
+            }
         }
 
         if (jobStatus !== 'SUCCEEDED') {
