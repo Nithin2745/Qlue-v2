@@ -130,7 +130,7 @@ class ResumeProvider extends ChangeNotifier {
       final uploadUrl = urlData['uploadUrl'];
       final resumeId = urlData['resumeId'];
 
-      // 3. S3 PUT — send raw bytes with minimal headers.
+      // 3. S3 PUT — send raw bytes with strict headers matching the signature.
       // We use Uri.parse to ensure Dio doesn't re-encode the already signed URL.
       final s3Dio = Dio();
       try {
@@ -138,10 +138,9 @@ class ResumeProvider extends ChangeNotifier {
           Uri.parse(uploadUrl),
           data: bytes,
           options: Options(
-            // S3 presigned URLs with UNSIGNED-PAYLOAD and SignedHeaders=host
-            // are very sensitive to extra headers. We clear defaults here.
+            // must match exactly what was signed in backend
             headers: {
-              'Content-Type': '', // Clear default
+              'Content-Type': 'application/pdf',
             },
             validateStatus: (status) => status != null && status < 400,
           ),
