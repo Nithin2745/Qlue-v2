@@ -747,6 +747,8 @@ Resources:
             BucketName: !Ref ResumesBucket
         - AmazonTextractFullAccess
         - AmazonBedrockFullAccess
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ProcessResumeUploadFunction
 
   GetResumeListFunction:
     Type: AWS::Serverless::Function
