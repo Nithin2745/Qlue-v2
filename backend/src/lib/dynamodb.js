@@ -1,12 +1,4 @@
-const AWS = require('aws-sdk');
-
-const dynamodb = new AWS.DynamoDB.DocumentClient({
-    region: process.env.AWS_REGION || 'us-east-1',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-});
-
-module.exports = dynamodb;
+// Standardizing on AWS SDK v3
 /**
  * Application wrappers for AWS DynamoDB Document Client.
  */
@@ -25,11 +17,7 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 
 const rawClient = new DynamoDBClient({ 
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-  }
+  region: process.env.AWS_REGION || 'us-east-1'
 });
 const docClient = DynamoDBDocumentClient.from(rawClient, {
   marshallOptions: {

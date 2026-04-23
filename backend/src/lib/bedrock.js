@@ -1,12 +1,3 @@
-const AWS = require('aws-sdk');
-
-const bedrock = new AWS.BedrockRuntime({
-    region: 'us-east-1',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-});
-
-module.exports = bedrock;
 /**
  * Amazon Bedrock Client Wrapper specifically tuned for Qlue's Nemotron-4-340b-instruct pipeline.
  */
@@ -15,15 +6,11 @@ const { getBedrockConfig } = require('./secrets');
 const { ERROR_CODES, QlueError } = require('./errors');
 
 const bedrockClient = new BedrockRuntimeClient({ 
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-  }
+  region: process.env.AWS_REGION || 'us-east-1'
 });
 
 // The required Model ID
-const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'NVIDIA Nemotron 3 Super 120B A12B';
+const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'nvidia.nemotron-super-3-120b';
 
 /**
  * Executes a Model Invocation with retries for Timeouts
@@ -45,11 +32,18 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
     try {
       const response = await bedrockClient.send(command);
       
-      const responseBody = JSON.parse(Buffer.from(response.body).toString('utf-8'));
+      let responseBody = JSON.parse(Buffer.from(response.body).toString('utf-8'));
       
+      // Normalize response format across models (Claude vs Nemotron)
+      if (responseBody.choices && responseBody.choices[0].message) {
+        responseBody.content = [{ text: responseBody.choices[0].message.content }];
+      } else if (responseBody.choices && responseBody.choices[0].text) {
+        responseBody.content = [{ text: responseBody.choices[0].text }];
+      }
+
       if (options.logTokens) {
         // Log tokens usage
-        console.info(`[Bedrock Tokens] Prompt: ${responseBody.usage?.prompt_tokens}, Completion: ${responseBody.usage?.completion_tokens}`);
+        console.info(`[Bedrock Tokens] Prompt: ${responseBody.usage?.prompt_tokens || '?'}, Completion: ${responseBody.usage?.completion_tokens || '?'}`);
       }
 
       return responseBody;
