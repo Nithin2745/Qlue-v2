@@ -10,6 +10,7 @@ import '../../core/models/resume_model.dart';
 import '../../context/resume_provider.dart';
 import '../../components/glass_card.dart';
 import '../../components/spectral_background.dart';
+import '../../components/confirmation_dialog.dart';
 
 class ResumeUploadScreen extends StatefulWidget {
   const ResumeUploadScreen({super.key});
@@ -50,11 +51,14 @@ class _ResumeUploadScreenState extends State<ResumeUploadScreen> {
           return;
         }
       } else {
-        // Fallback for mobile/desktop using path
-        if (fileData.path != null) {
-          success = await provider.uploadResume(fileData.path!, fileName);
+        // Mobile/Desktop
+        final path = fileData.path;
+        if (path != null) {
+          success = await provider.uploadResume(path, fileName);
+        } else if (fileData.bytes != null) {
+          success = await provider.uploadResume(fileData.bytes!, fileName);
         } else {
-          Notify.error(context, "Could not find file path.");
+          Notify.error(context, "Could not find file data or path.");
           setState(() => _isUploading = false);
           return;
         }
@@ -77,8 +81,19 @@ class _ResumeUploadScreenState extends State<ResumeUploadScreen> {
     }
   }
 
-  void _handleDelete(String resumeId) {
-    context.read<ResumeProvider>().deleteResume(resumeId);
+  void _handleDelete(String resumeId) async {
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: "Delete Resume?",
+      message: "This will permanently remove your document.",
+      confirmLabel: "Delete",
+      confirmColor: AppThemeColors.of(context).error,
+      icon: FeatherIcons.trash2,
+    );
+
+    if (confirmed == true && mounted) {
+      context.read<ResumeProvider>().deleteResume(resumeId);
+    }
   }
 
   void _showParsedPreview(ResumeModel r) {
@@ -179,13 +194,12 @@ class _ResumeUploadScreenState extends State<ResumeUploadScreen> {
             hasMetallicBorder: true,
             hasGlow: true,
             tintColor: t.primary,
-            child: Row(
+            child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (_isUploading) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
-                else const Icon(FeatherIcons.plus, color: Colors.white, size: 20),
-                const SizedBox(width: 12),
-                Text(_isUploading ? "Analysing..." : "Upload New", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                Icon(FeatherIcons.plus, color: Colors.white, size: 20),
+                SizedBox(width: 12),
+                Text("Upload New", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ],
             ),
           ),
@@ -245,13 +259,49 @@ class _ResumeUploadScreenState extends State<ResumeUploadScreen> {
             Expanded(
               child: provider.isLoading && resumes.isEmpty
                 ? const Center(child: CircularProgressIndicator())
-                : resumes.isEmpty 
-                  ? Center(child: Text("No resumes uploaded.\nUse the action button to add one.", textAlign: TextAlign.center, style: TextStyle(color: t.textTertiary, fontSize: 16)))
-                  : ListView.builder(
-                      padding: const EdgeInsets.only(top: 0, bottom: 100, left: 24, right: 24),
-                      itemCount: resumes.length,
-                      itemBuilder: (context, index) {
-                        final resume = resumes[index];
+                : ListView.builder(
+                    padding: const EdgeInsets.only(top: 0, bottom: 100, left: 24, right: 24),
+                    itemCount: (resumes.isEmpty && !_isUploading) ? 1 : resumes.length + (_isUploading ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (resumes.isEmpty && !_isUploading) {
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 100),
+                          child: Center(child: Text("No resumes uploaded.\nUse the action button to add one.", textAlign: TextAlign.center, style: TextStyle(color: t.textTertiary, fontSize: 16))),
+                        );
+                      }
+
+                      // Show "Analyzing" card as the first item if uploading
+                      if (_isUploading && index == 0) {
+                        return GlassCard(
+                          margin: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.all(20),
+                          hasMetallicBorder: true,
+                          hasGlow: true,
+                          tintColor: t.primary,
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 50, height: 50,
+                                decoration: BoxDecoration(color: t.primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(14)),
+                                child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text("Analyzing Resume...", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: t.text)),
+                                    const SizedBox(height: 4),
+                                    Text("Extracting information and generating profile", style: TextStyle(fontSize: 12, color: t.textSecondary)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+
+                      final resume = resumes[_isUploading ? index - 1 : index];
                       return GestureDetector(
                         onTap: () => _showParsedPreview(resume),
                         child: GlassCard(

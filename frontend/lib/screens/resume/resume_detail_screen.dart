@@ -6,6 +6,7 @@ import '../../core/models/resume_model.dart';
 import '../../context/resume_provider.dart';
 import '../../components/spectral_background.dart';
 import '../../components/glass_card.dart';
+import '../../components/confirmation_dialog.dart';
 import '../interview/interview_session_screen.dart';
 
 class SkillTag extends StatelessWidget {
@@ -555,25 +556,19 @@ class ResumeDetailScreen extends StatelessWidget {
     );
   }
 
-  void _handleDelete(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Delete Resume"),
-        content: const Text('Are you sure you want to delete this resume?'),
-        actions: [
-          TextButton(child: const Text("Cancel"), onPressed: () => Navigator.of(ctx).pop()),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: AppColors.semanticError),
-            child: const Text("Delete"),
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              context.read<ResumeProvider>().deleteResume(resumeId);
-              Navigator.of(context).pop();
-            },
-          ),
-        ],
-      ),
+  void _handleDelete(BuildContext context) async {
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: "Delete Resume?",
+      message: "This will permanently remove your document.",
+      confirmLabel: "Delete",
+      confirmColor: AppThemeColors.of(context).error,
+      icon: FeatherIcons.trash2,
     );
+
+    if (confirmed == true && context.mounted) {
+      context.read<ResumeProvider>().deleteResume(resumeId);
+      Navigator.of(context).pop();
+    }
   }
 }
