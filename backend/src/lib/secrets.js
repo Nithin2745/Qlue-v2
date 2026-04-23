@@ -51,18 +51,31 @@ async function getSecret(secretName) {
 }
 
 async function getFirebaseServiceAccount() {
+  if (process.env.MOCK_FIREBASE_SERVICE_ACCOUNT) {
+    return process.env.MOCK_FIREBASE_SERVICE_ACCOUNT;
+  }
   return getSecret('qlue/firebase-service-account');
 }
 
 async function getBedrockConfig() {
+  if (process.env.MOCK_BEDROCK_CONFIG) {
+    return process.env.MOCK_BEDROCK_CONFIG;
+  }
   return getSecret('qlue/bedrock-config');
 }
 
 async function getScraperApiKey() {
+  const envKey = process.env.SCRAPER_API_KEY || process.env.MOCK_SCRAPER_API_KEY;
+  if (envKey) {
+    return envKey;
+  }
   return getSecret('qlue/scraper-api-key');
 }
 
 async function getFCMServerKey() {
+  if (process.env.MOCK_FCM_SERVER_KEY) {
+    return process.env.MOCK_FCM_SERVER_KEY;
+  }
   return getSecret('qlue/fcm-server-key');
 }
 

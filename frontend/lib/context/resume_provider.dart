@@ -1,5 +1,7 @@
-import 'dart:io';
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -91,13 +93,23 @@ class ResumeProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> uploadResume(File file) async {
+  Future<bool> uploadResume(dynamic fileOrBytes, String fileName) async {
     try {
       _setLoading(true);
       _setError(null);
       
-      // 1. Hash check
-      final bytes = await file.readAsBytes();
+      Uint8List bytes;
+      if (fileOrBytes is Uint8List) {
+        bytes = fileOrBytes;
+      } else if (fileOrBytes is String) {
+        final file = File(fileOrBytes);
+        if (!await file.exists()) {
+          throw Exception("File not found at path: $fileOrBytes");
+        }
+        bytes = await file.readAsBytes();
+      } else {
+        bytes = await (fileOrBytes as dynamic).readAsBytes();
+      }
       final digest = sha256.convert(bytes);
       final hashStr = digest.toString();
       
@@ -108,7 +120,6 @@ class ResumeProvider extends ChangeNotifier {
       }
 
       // 2. Presigned URL
-      final fileName = file.path.split(Platform.pathSeparator).last;
       final fileSize = bytes.length;
       final urlData = await _apiService.generatePresignedUrl(
         fileName: fileName,
@@ -119,24 +130,40 @@ class ResumeProvider extends ChangeNotifier {
       final uploadUrl = urlData['uploadUrl'];
       final resumeId = urlData['resumeId'];
 
-      // 3. S3 PUT
-      final dio = Dio();
-      await dio.put(
-        uploadUrl,
-        data: file.openRead(),
-        options: Options(
-          headers: {
-            Headers.contentLengthHeader: fileSize,
-            Headers.contentTypeHeader: "application/pdf",
-          },
-        ),
-      );
+      // 3. S3 PUT — send raw bytes with minimal headers.
+      // We use Uri.parse to ensure Dio doesn't re-encode the already signed URL.
+      final s3Dio = Dio();
+      try {
+        final response = await s3Dio.putUri(
+          Uri.parse(uploadUrl),
+          data: bytes,
+          options: Options(
+            // S3 presigned URLs with UNSIGNED-PAYLOAD and SignedHeaders=host
+            // are very sensitive to extra headers. We clear defaults here.
+            headers: {
+              'Content-Type': '', // Clear default
+            },
+            validateStatus: (status) => status != null && status < 400,
+          ),
+        );
+        if (response.statusCode != null && response.statusCode! >= 400) {
+          throw Exception("S3 Upload returned ${response.statusCode}");
+        }
+      } on DioException catch (de) {
+        final statusCode = de.response?.statusCode;
+        final body = de.response?.data?.toString() ?? de.message ?? 'Unknown error';
+        throw Exception("S3 Upload Failed ($statusCode): $body");
+      }
 
-      // 4. Trigger Processing
+      // 4. Trigger Processing — backend responds 202 immediately,
+      //    then parses asynchronously. Frontend polls via _startPolling().
       await _apiService.processResumeUpload(resumeId);
       
-      // Reload resumes
+      // Reload resumes (will show PARSING status)
       await fetchResumes();
+
+      // Start polling this resume's status
+      _startPolling(resumeId);
       
       return true;
 

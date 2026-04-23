@@ -1,4 +1,4 @@
-const admin = require('../../lib/firebase');
+const firebase = require('../../lib/firebase');
 
 /**
  * AWS Lambda Authorizer: Validates Firebase ID Tokens for API Gateway
@@ -14,10 +14,12 @@ exports.handler = async (event) => {
     const bearerToken = token.startsWith('Bearer ') ? token.split(' ')[1] : token;
 
     try {
-        const decodedToken = await admin.auth().verifyIdToken(bearerToken, true);
+        const auth = await firebase.getAuth();
+        const decodedToken = await auth.verifyIdToken(bearerToken, true);
         
         // Return IAM Policy for Authorized user
-        return generatePolicy(decodedToken.uid, 'Allow', event.methodArn || '*', {
+        // Using '*' for resource to allow the cached policy to work for all endpoints
+        return generatePolicy(decodedToken.uid, 'Allow', '*', {
             uid: decodedToken.uid,
             email: decodedToken.email || '',
             emailVerified: decodedToken.email_verified || false
