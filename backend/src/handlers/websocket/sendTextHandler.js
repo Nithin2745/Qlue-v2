@@ -11,7 +11,6 @@ const { invokeModelStream, buildResumeQuestionPrompt, buildHRQuestionPrompt, bui
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
 const { getTranscriptBySession } = require('../../models/transcript');
-const { MESSAGE_TYPES } = require('../../lib/websocketMessages');
 
 
 // Voice Mapping
@@ -83,33 +82,32 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
     let lastProcessPromise = Promise.resolve();
 
     const processSentence = async (sentence) => {
-        // CLEANUP: Strip common JSON markers if the model accidentally includes them
         let cleanSentence = sentence
             .replace(/\{"question":\s*"/g, '')
             .replace(/\{"response":\s*"/g, '')
             .replace(/"\}/g, '')
-            .replace(/\\"/g, '"') // Unescape quotes
+            .replace(/\\"/g, '"')
             .trim();
 
         if (!cleanSentence) return;
-        
-        // Use a sequential chain to ensure sentences are synthesized and sent IN ORDER
+
         lastProcessPromise = lastProcessPromise.then(async () => {
             try {
+                let allAudio = Buffer.alloc(0);
                 for await (const audioChunk of synthesizeToBase64Chunks(cleanSentence, { VoiceId: pollyVoice })) {
-                    await postToConnection(connectionId, {
-                        type: MESSAGE_TYPES.TTS_AUDIO_CHUNK,
-                        payload: {
-                            chunkIndex: globalAudioChunkIndex++,
-                            audioData: audioChunk.audioData,
-                            isLast: false
-                        }
-                    });
+                    allAudio = Buffer.concat([allAudio, Buffer.from(audioChunk.audioData, 'base64')]);
                 }
+
+                await postToConnection(connectionId, {
+                    type: 'tts_audio_chunk',
+                    payload: {
+                        chunkIndex: globalAudioChunkIndex++,
+                        audioData: allAudio.toString('base64'),
+                        isLast: false
+                    }
+                });
             } catch (err) {
                 console.error('Sentence processing failed in background:', err);
-                // We don't rethrow here to avoid breaking the entire stream chain, 
-                // but the error is now caught and logged.
             }
         });
     };
@@ -120,10 +118,8 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
         // Notify client that AI is preparing to speak
         await postToConnection(connectionId, {
             type: 'session_text_stream',
-            payload: {
-                text: "", 
-                status: "thinking"
-            }
+            text: "", 
+            status: "thinking"
         });
 
         // LATENCY HIDING: If this is the start of the session, send an immediate intro
@@ -160,7 +156,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
                 textRefreshTimer = setTimeout(() => {
                     postToConnection(connectionId, {
                         type: 'session_text_stream',
-                        payload: { text: fullText }
+                        text: fullText
                     });
                     textRefreshTimer = null;
                 }, 200);
@@ -179,7 +175,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
         
         // FINAL SIGNAL: Send an empty chunk with isLast:true to signal completion
         await postToConnection(connectionId, {
-            type: MESSAGE_TYPES.TTS_AUDIO_CHUNK,
+            type: 'tts_audio_chunk',
             payload: {
                 audioData: '',
                 isLast: true

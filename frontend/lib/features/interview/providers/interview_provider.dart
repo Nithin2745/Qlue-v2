@@ -41,6 +41,7 @@ class InterviewProvider extends ChangeNotifier {
   final SttService _sttService = SttService();
   final TtsService _ttsService = TtsService();
   final WebSocketClient _wsClient = WebSocketClient();
+  bool _isLastAudioChunkReceived = false;
 
 
   Future<void> initSession(String type, {String? resumeId, String? websiteUrl}) async {
@@ -49,6 +50,7 @@ class InterviewProvider extends ChangeNotifier {
     _silenceStrikes = 0;
     errorMessage = null;
     moduleType = type;
+    _isLastAudioChunkReceived = false;
     notifyListeners();
 
     try {
@@ -81,6 +83,7 @@ class InterviewProvider extends ChangeNotifier {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
     _ttsService.onPlaybackComplete = onAudioPlaybackComplete;
+    _isLastAudioChunkReceived = false;
     startInterview();
   }
 
@@ -102,18 +105,19 @@ class InterviewProvider extends ChangeNotifier {
       case 'tts_audio_chunk':
         final base64Data = payload['audioData'] ?? '';
         final isLast = payload['isLast'] == true;
+
+        if (isLast) {
+          _isLastAudioChunkReceived = true;
+        }
+
         if (base64Data.isNotEmpty) {
           _ttsService.playBase64Chunk(base64Data, isLast);
         }
-        if (isLast) {
-          currentPhase = InterviewPhase.speaking;
-          notifyListeners();
+
+        // If last chunk arrived and nothing is playing/queued, transition immediately
+        if (isLast && !_ttsService.isPlaying && _ttsService.queue.isEmpty) {
+          onAudioPlaybackComplete();
         }
-        break;
-        
-      case 'session_text_stream':
-        questionText = payload['text'] ?? questionText;
-        notifyListeners();
         break;
 
 
@@ -170,8 +174,8 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void onAudioPlaybackComplete() {
-    // Triggered when TTS finishes. Move to listening state if session is active.
-    if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
+    // Triggered when TTS finishes. Move to listening state if session is active and all chunks arrived.
+    if (!isSessionEnded && currentPhase == InterviewPhase.speaking && _isLastAudioChunkReceived) {
       currentPhase = InterviewPhase.listening;
       notifyListeners();
       _startListening();

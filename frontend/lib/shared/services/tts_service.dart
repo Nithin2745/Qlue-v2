@@ -12,11 +12,16 @@ class TtsService {
   final AudioPlayer _player = AudioPlayer();
   final List<Uint8List> _queue = [];
   bool _isPlaying = false;
+  bool _hasSignaledCompletion = false;
+
+  bool get isPlaying => _isPlaying;
+  List<Uint8List> get queue => List.unmodifiable(_queue);
   
   Function? onPlaybackComplete;
 
   Future<void> playBase64Chunk(String base64Data, bool isLast) async {
     if (base64Data.isNotEmpty) {
+      _hasSignaledCompletion = false; // New audio batch starting
       final bytes = base64Decode(base64Data);
       _queue.add(bytes);
     }
@@ -25,7 +30,8 @@ class TtsService {
       _startPlayback();
     }
 
-    if (isLast && _queue.isEmpty && !_isPlaying) {
+    if (isLast && _queue.isEmpty && !_isPlaying && !_hasSignaledCompletion) {
+      _hasSignaledCompletion = true;
       onPlaybackComplete?.call();
     }
   }
@@ -54,7 +60,10 @@ class TtsService {
       }
     } finally {
       _isPlaying = false;
-      onPlaybackComplete?.call();
+      if (!_hasSignaledCompletion) {
+        _hasSignaledCompletion = true;
+        onPlaybackComplete?.call();
+      }
     }
   }
 
@@ -62,6 +71,7 @@ class TtsService {
     await _player.stop();
     _queue.clear();
     _isPlaying = false;
+    _hasSignaledCompletion = false;
   }
 
   void dispose() {
