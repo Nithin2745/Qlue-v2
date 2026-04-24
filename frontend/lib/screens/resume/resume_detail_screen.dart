@@ -275,6 +275,34 @@ class ResumeDetailScreen extends StatelessWidget {
                           "Parsing failed",
                           "Please try uploading again",
                         ),
+                      if (resume.parsedData != null) ...[
+                         DetailSection(
+                          title: "AI Technical Profile",
+                          icon: FeatherIcons.activity,
+                          iconColor: const Color(0xFF10B981),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "Your technical background has been fully indexed. The AI interviewer will use these details to ground your technical assessment in your actual experience.",
+                                  style: TextStyle(fontSize: 13, color: t.textSecondary, height: 1.5),
+                                ),
+                                const SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    _statPill(FeatherIcons.briefcase, "${resume.parsedData?.workExperience?.length ?? 0} Experiences", t),
+                                    const SizedBox(width: 8),
+                                    _statPill(FeatherIcons.code, "${resume.parsedData?.projects?.length ?? 0} Projects", t),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       if (resume.parsedData?.name != null) ...[
                         DetailSection(
                           title: "Candidate Name",
@@ -504,7 +532,7 @@ class ResumeDetailScreen extends StatelessWidget {
                       borderRadius: BorderRadius.circular(16),
                       onTap: () {
                         Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const InterviewSessionScreen()),
+                          MaterialPageRoute(builder: (_) => InterviewSessionScreen(resumeId: resumeId)),
                         );
                       },
                       child: SizedBox(
@@ -576,6 +604,25 @@ class ResumeDetailScreen extends StatelessWidget {
               Text(subtitle, style: TextStyle(fontSize: 12, color: t.textSecondary)),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statPill(IconData icon, String label, AppThemeColors t) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: t.bgSecondary,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: t.border.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: t.primary),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: t.textSecondary)),
         ],
       ),
     );
