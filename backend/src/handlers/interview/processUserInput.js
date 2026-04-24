@@ -1,5 +1,5 @@
 const { getSession, updateSessionState } = require('../../models/session');
-const { SPEAKERS, saveTranscript } = require('../../models/transcript');
+const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../../models/transcript');
 const { transitionState, INTERVIEW_STATES } = require('./controlTurnFlow');
 const { invokeModel, buildScoringPrompt, buildWebsiteTeachPrompt, buildSelfIntroEvalPrompt } = require('../../lib/bedrock');
 const { CONCEPT_STATES, updateConceptState } = require('../../models/conceptState');
@@ -97,10 +97,16 @@ exports.handler = async (event) => {
         
         let scores = {};
         try {
-            const bedrockResult = await invokeModel(undefined, promptParams);
-            if (bedrockResult) scores = bedrockResult; 
+          const bedrockResult = await invokeModel(undefined, promptParams);
+          if (bedrockResult?.content?.[0]?.text) {
+            const rawText = bedrockResult.content[0].text.trim();
+            // Strip markdown code fences if present
+            const jsonText = rawText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+            scores = JSON.parse(jsonText);
+          }
         } catch (e) {
-            console.error('Bedrock evaluation failed cleanly.', e);
+          console.error('Bedrock evaluation failed cleanly.', e);
+          scores = {};
         }
 
         // --- 3. ADAPTIVE TUTORING ---
@@ -157,6 +163,11 @@ exports.handler = async (event) => {
                     onlyQuestion = nextAIResponse;
                 }
             }
+
+            if (!nextAIResponse) {
+                nextAIResponse = `Let's talk about ${targetConcept}. What do you know about it so far?`;
+                onlyQuestion = nextAIResponse;
+            }
         } else if (session.moduleType === 'INTRO') {
             const prompt = buildSelfIntroEvalPrompt(textTranscript);
             const bedrockResult = await invokeModel(undefined, { messages: prompt });
@@ -170,6 +181,11 @@ exports.handler = async (event) => {
                     nextAIResponse = bedrockResult.content[0].text;
                     onlyQuestion = nextAIResponse;
                 }
+            }
+
+            if (!nextAIResponse) {
+                nextAIResponse = "Thanks for that introduction! I've noted your background. Let's move on to the next part of our session.";
+                onlyQuestion = nextAIResponse;
             }
         } else {
             // Standard Interview Flow

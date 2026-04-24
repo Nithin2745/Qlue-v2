@@ -55,8 +55,17 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
     // Initialize Real Session
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final interviewProvider = context.read<InterviewProvider>();
+      
+      // Attach listener for intensity simulation
+      interviewProvider.addListener(() {
+        if (mounted) {
+          _simulateIntensity(interviewProvider.currentPhase);
+        }
+      });
+
       final type = widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR');
-      context.read<InterviewProvider>().initSession(
+      interviewProvider.initSession(
         type, 
         resumeId: widget.resumeId,
         websiteUrl: widget.websiteUrl,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 
 class TtsService {
   static final TtsService _instance = TtsService._internal();
@@ -34,21 +35,27 @@ class TtsService {
     
     _isPlaying = true;
     
-    while (_queue.isNotEmpty) {
-      final chunk = _queue.removeAt(0);
-      try {
-        await _player.play(BytesSource(chunk));
-        // We need to wait for the player to finish this specific chunk
-        // Audioplayers 6.x doesn't have a simple way to wait for "play" to finish for a ByteSource 
-        // if we are streaming, but we can use the onPlayerComplete stream.
-        await _player.onPlayerComplete.first;
-      } catch (e) {
-        print('Error playing audio chunk: $e');
+    try {
+      while (_queue.isNotEmpty) {
+        final chunk = _queue.removeAt(0);
+        try {
+          // Use setSourceBytes + resume as a more stable alternative for some versions
+          await _player.setSource(BytesSource(chunk));
+          await _player.resume();
+          
+          // Wait for completion
+          await _player.onPlayerComplete.first;
+          // Small gap to prevent overlapping or driver crashes
+          await Future.delayed(const Duration(milliseconds: 50));
+        } catch (e) {
+          debugPrint('TTS Chunk Playback Error: $e');
+          // Skip corrupt chunk and continue
+        }
       }
+    } finally {
+      _isPlaying = false;
+      onPlaybackComplete?.call();
     }
-    
-    _isPlaying = false;
-    onPlaybackComplete?.call();
   }
 
   Future<void> stop() async {

@@ -441,14 +441,14 @@ class _AIModulesScreenState extends State<AIModulesScreen>
             }
 
             final uri = Uri.tryParse(url);
-            if (uri == null || !uri.hasAbsolutePath) {
+            if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
               Notify.error(context, "Invalid URL format.");
               return;
             }
 
             setState(() => _isValidatingUrl = true);
             try {
-              final response = await context.read<DioClient>().dio.post(
+              final response = await DioClient().dio.post(
                 ApiConstants.websiteValidate,
                 data: {'websiteUrl': url},
               );

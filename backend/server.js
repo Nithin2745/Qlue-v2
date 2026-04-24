@@ -31,6 +31,7 @@ const initializeSession = require("./src/handlers/interview/initializeSession").
 const processUserInput = require("./src/handlers/interview/processUserInput").handler;
 const generateQuestion = require("./src/handlers/interview/generateQuestion").handler;
 const terminateSession = require("./src/handlers/interview/terminateSession").handler;
+const validateWebsite = require("./src/handlers/website/validateWebsite").handler;
 
 const app = express();
 app.use(cors());
@@ -44,20 +45,20 @@ app.use((req, res, next) => {
 
 // Firebase Auth Middleware
 const authMiddleware = async (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const idToken = authHeader.split('Bearer ')[1];
-        try {
-            const decodedToken = await firebase.verifyIdToken(idToken);
-            req.user = decodedToken;
-        } catch (error) {
-            console.error('Error verifying Firebase ID token:', error.message);
-        }
-    } else {
-        // Fallback for local dev testing
-        req.user = { uid: "local-dev-user" };
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const idToken = authHeader.split('Bearer ')[1];
+    try {
+      const decodedToken = await firebase.verifyIdToken(idToken);
+      req.user = decodedToken;
+      next();
+    } catch (error) {
+      console.error('Error verifying Firebase ID token:', error.message);
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-    next();
+  } else {
+    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+  }
 };
 
 // Lambda to Express Adapter
@@ -67,7 +68,12 @@ function lambdaToExpress(handler) {
       body: req.body ? JSON.stringify(req.body) : null,
       pathParameters: req.params || {},
       queryStringParameters: req.query || {},
-      requestContext: { authorizer: { uid: req.user?.uid } },
+      requestContext: { 
+        authorizer: { 
+          uid: req.user?.uid,
+          claims: { sub: req.user?.uid }
+        } 
+      },
     };
     try {
         const result = await handler(event);
@@ -109,6 +115,9 @@ app.post("/interview/init", lambdaToExpress(initializeSession));
 app.post("/interview/process", lambdaToExpress(processUserInput));
 app.post("/interview/question", lambdaToExpress(generateQuestion));
 app.post("/interview/terminate", lambdaToExpress(terminateSession));
+
+// Website Routes
+app.post("/website/validate", authMiddleware, lambdaToExpress(validateWebsite));
 
 // Root
 app.get("/", (req, res) => {

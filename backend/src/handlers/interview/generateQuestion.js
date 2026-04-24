@@ -125,7 +125,9 @@ exports.handler = async (event) => {
                             } catch (e) {
                                 onlyQuestion = rawContent;
                             }
-                        } else {
+                        }
+
+                        if (!onlyQuestion) {
                             onlyQuestion = "That's interesting. Can you elaborate more on the technical challenges you faced in your most recent project?";
                         }
                     }

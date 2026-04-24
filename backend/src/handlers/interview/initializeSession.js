@@ -45,7 +45,14 @@ exports.handler = async (event) => {
 
         // WEBSOCKET_ENDPOINT is set by SAM template as https://... but frontend needs wss://
         const wsHttpEndpoint = process.env.WEBSOCKET_ENDPOINT || '';
-        const wsUrl = wsHttpEndpoint.replace('https://', 'wss://');
+        let wsUrl = '';
+        if (wsHttpEndpoint) {
+          wsUrl = wsHttpEndpoint.startsWith('https://') 
+            ? wsHttpEndpoint.replace('https://', 'wss://') 
+            : wsHttpEndpoint;
+        } else {
+          wsUrl = process.env.WS_FALLBACK_URL || '';
+        }
 
         return {
             statusCode: 200,

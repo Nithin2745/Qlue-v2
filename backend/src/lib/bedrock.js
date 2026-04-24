@@ -187,12 +187,17 @@ Format your output strictly as a JSON object: {"response": "Your coaching feedba
  */
 function buildScoringPrompt(moduleType, transcript, dimensions) {
   return {
-    prompt: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
+    messages: [
+      {
+        role: 'system',
+        content: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
 Please score the applicant across these dimensions: ${dimensions.join(', ')}.
 Transcript:
 ${JSON.stringify(transcript)}
 
 Format your output strictly as JSON mapping each dimension to a score between 1-100.`
+      }
+    ]
   };
 }
 
@@ -201,12 +206,17 @@ Format your output strictly as JSON mapping each dimension to a score between 1-
  */
 function buildFeedbackPrompt(moduleType, transcript, scores) {
   return {
-    prompt: `You are an AI Interview coach providing actionable feedback.
+    messages: [
+      {
+        role: 'system',
+        content: `You are an AI Interview coach providing actionable feedback.
 Review the following ${moduleType} session.
 Scores: ${JSON.stringify(scores)}
 Transcript: ${JSON.stringify(transcript)}
 
 Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths": [], "improvements": []}`
+      }
+    ]
   };
 }
 
@@ -215,10 +225,15 @@ Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths
  */
 function buildConceptExtractionPrompt(content) {
   return {
-    prompt: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
+    messages: [
+      {
+        role: 'system',
+        content: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
 Text: ${content.substring(0, 5000)}
 
 Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`
+      }
+    ]
   };
 }
 

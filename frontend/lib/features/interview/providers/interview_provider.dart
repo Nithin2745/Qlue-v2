@@ -102,7 +102,13 @@ class InterviewProvider extends ChangeNotifier {
       case 'tts_audio_chunk':
         final base64Data = payload['audioData'] ?? '';
         final isLast = payload['isLast'] == true;
-        _ttsService.playBase64Chunk(base64Data, isLast);
+        if (base64Data.isNotEmpty) {
+          _ttsService.playBase64Chunk(base64Data, isLast);
+        }
+        if (isLast) {
+          currentPhase = InterviewPhase.speaking;
+          notifyListeners();
+        }
         break;
 
 
@@ -159,18 +165,15 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void onAudioPlaybackComplete() {
-    _audioChunkQueue.clear();
-    if (currentPhase == InterviewPhase.speaking) {
-      // The backend might set us to listening via session_state_update, 
-      // but if not, we transition manually or wait for the update.
-      // Instructions say: onAudioPlaybackComplete() clears queue, transitions phase to listening
+    // Triggered when TTS finishes. Move to listening state if session is active.
+    if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
       currentPhase = InterviewPhase.listening;
-      _startListening();
       notifyListeners();
+      _startListening();
     }
   }
 
-  void sendTranscript(String text) {
+  void sendTextTranscript(String text) {
     transcript.add(TranscriptEntry(
       role: 'user',
       text: text,
@@ -214,7 +217,7 @@ class InterviewProvider extends ChangeNotifier {
         partialTranscript = "";
         isListening = false;
         _stopSilenceTimer();
-        sendTranscript(text);
+        sendTextTranscript(text);
         notifyListeners();
       },
     );
