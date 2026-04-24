@@ -2,9 +2,14 @@
  * Wrapper for AWS Polly streaming integration.
  */
 const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
 
 const polly = new PollyClient({ 
-  region: process.env.AWS_REGION || 'us-east-1'
+  region: process.env.AWS_REGION || 'us-east-1',
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: 5000,
+    requestTimeout: 15000
+  })
 });
 
 /**
@@ -22,7 +27,9 @@ function getEstimatedDuration(text) {
  * Validates and splits text at sentence boundaries if too long
  */
 function splitTextAtSentences(text, maxLength = 3000) {
+  if (!text) return [""];
   if (text.length <= maxLength) return [text];
+
   
   const chunks = [];
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
@@ -62,47 +69,45 @@ async function* synthesizeToBase64Chunks(text, options = {}) {
     const command = new SynthesizeSpeechCommand({
       Engine: engine,
       VoiceId: voiceId,
-      OutputFormat: 'pcm',
-      Text: chunkText,
-      SampleRate: '16000'
+      OutputFormat: 'mp3',
+      Text: `<speak>${chunkText}</speak>`,
+      TextType: 'ssml',
+      SampleRate: '22050' // standard for neural mp3
     });
 
     try {
+      console.debug(`[Polly] Sending request for chunk: "${chunkText.substring(0, 50)}..."`);
       const response = await polly.send(command);
-      
-      // response.AudioStream is a Readable stream in Node.js
       const stream = response.AudioStream;
-      const CHUNK_SIZE = 4096;
-      let buffer = Buffer.alloc(0);
 
+      const TARGET_CHUNK_SIZE = 32768; 
+      let buffer = Buffer.alloc(0);
+      let isFirstInChunk = true;
+
+      console.debug(`[Polly] Stream received, processing chunks...`);
       for await (const data of stream) {
         buffer = Buffer.concat([buffer, data]);
-        
-        while (buffer.length >= CHUNK_SIZE) {
-          const chunk = buffer.subarray(0, CHUNK_SIZE);
-          buffer = buffer.subarray(CHUNK_SIZE);
+
+        // ULTRA-LOW LATENCY: Yield the very first packet immediately, regardless of size
+        // Subsequent packets are grouped into 32KB to maintain efficiency.
+        if (isFirstInChunk || buffer.length >= TARGET_CHUNK_SIZE) {
+          console.debug(`[Polly] Yielding chunk ${globalChunkIndex} (Size: ${buffer.length}, first: ${isFirstInChunk})`);
           yield {
             chunkIndex: globalChunkIndex++,
-            audioData: chunk.toString('base64'),
-            isLast: false // managed below
+            audioData: buffer.toString('base64')
           };
+          buffer = Buffer.alloc(0);
+          isFirstInChunk = false;
         }
       }
       
-      // yield remainder if it exists
+      const isVeryLastInSequence = t === textChunks.length - 1;
+      
       if (buffer.length > 0) {
-        const isVeryLast = t === textChunks.length - 1;
+        console.debug(`[Polly] Yielding final buffer chunk ${globalChunkIndex}`);
         yield {
           chunkIndex: globalChunkIndex++,
-          audioData: buffer.toString('base64'),
-          isLast: isVeryLast
-        };
-      } else if (t === textChunks.length - 1) {
-        // if buffer exactly hit 0 but it's the last chunk of last item
-        yield {
-          chunkIndex: globalChunkIndex++,
-          audioData: '',
-          isLast: true
+          audioData: buffer.toString('base64')
         };
       }
 
@@ -112,6 +117,7 @@ async function* synthesizeToBase64Chunks(text, options = {}) {
     }
   }
 }
+
 
 module.exports = {
   getEstimatedDuration,
