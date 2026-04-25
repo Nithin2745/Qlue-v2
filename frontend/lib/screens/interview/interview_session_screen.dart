@@ -119,11 +119,12 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     _isSimulating = true;
     
     Future.doWhile(() async {
-      if (!mounted || (phase != InterviewPhase.speaking && phase != InterviewPhase.listening)) {
+      final currentPhase = context.read<InterviewProvider>().currentPhase;
+      if (!mounted || (currentPhase != InterviewPhase.speaking && currentPhase != InterviewPhase.listening)) {
         _isSimulating = false;
         return false;
       }
-      final target = 0.1 + math.Random().nextDouble() * (phase == InterviewPhase.speaking ? 0.4 : 0.8);
+      final target = 0.1 + math.Random().nextDouble() * (currentPhase == InterviewPhase.speaking ? 0.4 : 0.8);
       if (mounted) {
         _intensityController.animateTo(target, duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
       }
@@ -288,19 +289,22 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                 if (aiText.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    child: Text(
-                      aiText,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w600,
-                        color: isTutor ? Colors.tealAccent : Colors.white.withValues(alpha: 0.9),
-                        height: 1.4,
-                        letterSpacing: -0.5,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      child: SingleChildScrollView(
+                        child: Text(
+                          aiText,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w600,
+                            color: isTutor ? Colors.tealAccent : Colors.white.withValues(alpha: 0.9),
+                            height: 1.4,
+                            letterSpacing: -0.5,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
-                      maxLines: 6,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
 
@@ -316,19 +320,22 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                 if (userText.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                    child: Text(
-                      userText,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w500,
-                        color: Colors.orangeAccent.withValues(alpha: 0.8),
-                        height: 1.4,
-                        letterSpacing: -0.3,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 100),
+                      child: SingleChildScrollView(
+                        child: Text(
+                          userText,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w500,
+                            color: Colors.orangeAccent.withValues(alpha: 0.8),
+                            height: 1.4,
+                            letterSpacing: -0.3,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
 

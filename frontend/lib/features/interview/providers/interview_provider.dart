@@ -179,11 +179,9 @@ class InterviewProvider extends ChangeNotifier {
 
       case 'ai_speaking_complete':
         if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
-          currentPhase = InterviewPhase.listening;
           subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
           isStreamingText = false;
           notifyListeners();
-          _startListening();
         }
         break;
 

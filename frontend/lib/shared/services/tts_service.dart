@@ -22,15 +22,18 @@ class TtsService {
   Future<void> playBase64Chunk(String base64Data, bool isLast) async {
     if (base64Data.isNotEmpty) {
       _hasSignaledCompletion = false;
-      final bytes = base64Decode(base64Data);
-      _queue.add(bytes);
+      try {
+        final bytes = base64Decode(base64Data);
+        _queue.add(bytes);
+      } catch (e) {
+        debugPrint('TTS Decode Error: $e');
+      }
     }
 
     if (!_isPlaying && _queue.isNotEmpty) {
       _startPlayback();
     }
 
-    // FIX: If this is the last chunk and nothing is playing/queued, signal completion
     if (isLast && _queue.isEmpty && !_isPlaying && !_hasSignaledCompletion) {
       _hasSignaledCompletion = true;
       onPlaybackComplete?.call();
@@ -46,18 +49,15 @@ class TtsService {
       while (_queue.isNotEmpty) {
         final chunk = _queue.removeAt(0);
         try {
-          // Use setSourceBytes + resume as a more stable alternative for some versions
           await _player.setSource(BytesSource(chunk));
           await _player.resume();
           
-          // Wait for completion
           await _player.onPlayerComplete.first
-              .timeout(const Duration(seconds: 30), onTimeout: () => null);
-          // Small gap to prevent overlapping or driver crashes
-          await Future.delayed(const Duration(milliseconds: 30));
+              .timeout(const Duration(seconds: 10), onTimeout: () => null);
+          
+          await Future.delayed(const Duration(milliseconds: 50));
         } catch (e) {
           debugPrint('TTS Chunk Playback Error: $e');
-          // Skip corrupt chunk and continue
         }
       }
     } finally {
