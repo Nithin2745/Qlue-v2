@@ -1,98 +1,128 @@
-/**
- * Model for managing WebSocket connection records in DynamoDB.
- */
-const ddb = require('../lib/dynamodb');
+const { docClient } = require('../lib/dynamodb');
+const { PutCommand, UpdateCommand, GetCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
 
-const TABLE_NAME = process.env.WS_CONNECTIONS_TABLE || 'WSConnections';
+const WS_CONNECTIONS_TABLE = process.env.WS_CONNECTIONS_TABLE;
 
 /**
- * Finds user's active connection via GSI.
- */
-async function getActiveConnectionByUserId(userId) {
-  const result = await ddb.query(
-    TABLE_NAME,
-    'userId = :uid AND isActive = :active',
-    {
-      values: {
-        ':uid': userId,
-        ':active': 'true'
-      },
-      index: 'GSI_UserIdIsActive'
-    }
-  );
-
-  if (result.success && result.data && result.data.length > 0) {
-    return result.data[0];
-  }
-  return null;
-}
-
-/**
- * Register a new connection or update existing.
+ * Register a new connection or update existing in V2.
  */
 async function saveConnection(connectionId, userId, sessionId = null) {
-  const item = {
-    connectionId,
-    userId,
-    sessionId,
-    isActive: 'true',
-    connectedAt: Date.now(),
-    lastHeartbeat: Date.now(),
-    ttl: Math.floor(Date.now() / 1000) + 7200 // 2 hours
-  };
+    const now = Date.now();
+    const item = {
+        userId,
+        connectionKey: `CONN#${now}#${connectionId}`,
+        connectionId,
+        sessionId,
+        isActive: 'true',
+        connectedAt: now,
+        lastHeartbeat: now,
+        ttl: Math.floor(now / 1000) + 7200 // 2 hours
+    };
 
-  return await ddb.put(TABLE_NAME, item);
+    await docClient.send(new PutCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        Item: item
+    }));
+
+    return { success: true };
 }
 
 /**
- * Deactivate a connection by ID.
+ * Deactivate a connection by ID in V2.
  */
-async function deactivateConnection(connectionId) {
-  return await ddb.update(
-    TABLE_NAME,
-    { connectionId },
-    'SET isActive = :val',
-    { ':val': 'false' }
-  );
+async function deactivateConnection(userId, connectionKey) {
+    await docClient.send(new UpdateCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        Key: { userId, connectionKey },
+        UpdateExpression: 'SET isActive = :val',
+        ExpressionAttributeValues: { ':val': 'false' }
+    }));
+    return { success: true };
 }
 
 /**
- * Update heartbeat timestamp.
+ * Update heartbeat timestamp in V2.
  */
-async function updateHeartbeat(connectionId) {
-  return await ddb.update(
-    TABLE_NAME,
-    { connectionId },
-    'SET lastHeartbeat = :ts',
-    { ':ts': Date.now() }
-  );
+async function updateHeartbeat(userId, connectionKey) {
+    const now = Date.now();
+    await docClient.send(new UpdateCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        Key: { userId, connectionKey },
+        UpdateExpression: 'SET lastHeartbeat = :ts',
+        ExpressionAttributeValues: { ':ts': now }
+    }));
+    return { success: true };
 }
 
 /**
- * Associate a session ID with a connection.
+ * Associate a session ID with a connection in V2.
  */
-async function associateSession(connectionId, sessionId) {
-  return await ddb.update(
-    TABLE_NAME,
-    { connectionId },
-    'SET sessionId = :sid',
-    { ':sid': sessionId }
-  );
+async function associateSession(userId, connectionKey, sessionId) {
+    await docClient.send(new UpdateCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        Key: { userId, connectionKey },
+        UpdateExpression: 'SET sessionId = :sid',
+        ExpressionAttributeValues: { ':sid': sessionId }
+    }));
+    return { success: true };
 }
 
 /**
- * Get connection by primary key.
+ * Get connection by connectionId using V2 GSI.
  */
 async function getConnection(connectionId) {
-  const result = await ddb.get(TABLE_NAME, { connectionId });
-  return result.success ? result.data : null;
+    const command = new QueryCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        IndexName: 'ConnectionIdIndex',
+        KeyConditionExpression: 'connectionId = :cid',
+        ExpressionAttributeValues: { ':cid': connectionId },
+        Limit: 1
+    });
+    const res = await docClient.send(command);
+    return (res.Items && res.Items.length > 0) ? res.Items[0] : null;
+}
+
+/**
+ * Finds user's active connection via V2 GSI.
+ */
+async function getActiveConnectionByUserId(userId) {
+    const command = new QueryCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        // Using Primary Key since userId is HASH
+        KeyConditionExpression: 'userId = :uid AND begins_with(connectionKey, :prefix)',
+        FilterExpression: 'isActive = :active',
+        ExpressionAttributeValues: {
+            ':uid': userId,
+            ':prefix': 'CONN#',
+            ':active': 'true'
+        },
+        ScanIndexForward: false,
+        Limit: 1
+    });
+    const res = await docClient.send(command);
+    return (res.Items && res.Items.length > 0) ? res.Items[0] : null;
+}
+
+/**
+ * Finds all active connections for a session using V2 GSI.
+ */
+async function getConnectionsBySessionId(sessionId) {
+    const command = new QueryCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        IndexName: 'SessionConnectionIndex',
+        KeyConditionExpression: 'sessionId = :sid',
+        ExpressionAttributeValues: { ':sid': sessionId }
+    });
+    const res = await docClient.send(command);
+    return res.Items || [];
 }
 
 module.exports = {
-  getActiveConnectionByUserId,
-  saveConnection,
-  deactivateConnection,
-  updateHeartbeat,
-  associateSession,
-  getConnection
+    getActiveConnectionByUserId,
+    saveConnection,
+    deactivateConnection,
+    updateHeartbeat,
+    associateSession,
+    getConnection,
+    getConnectionsBySessionId
 };

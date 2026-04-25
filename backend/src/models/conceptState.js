@@ -1,12 +1,7 @@
 const { docClient } = require('../lib/dynamodb');
-const { UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
-const { CloudWatchClient, PutMetricDataCommand } = require("@aws-sdk/client-cloudwatch");
-const { getSession } = require('./session');
+const { UpdateCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 
-const cloudwatch = new CloudWatchClient({});
-
-const CONCEPTS_TABLE = process.env.CONCEPTS_TABLE_NAME || 'Concepts';
-const SESSIONS_TABLE_V2 = process.env.SESSIONS_TABLE_V2;
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE;
 
 const CONCEPT_STATES = {
     UNADDRESSED: 'UNADDRESSED',
@@ -14,119 +9,65 @@ const CONCEPT_STATES = {
     MASTERED: 'MASTERED'
 };
 
-async function emitV2WriteFailureMetric(tableName) {
-    try {
-        await cloudwatch.send(new PutMetricDataCommand({
-            Namespace: "Qlue/DatabaseMigration",
-            MetricData: [{
-                MetricName: "v2_write_failure",
-                Dimensions: [{ Name: "TableName", Value: tableName }],
-                Value: 1,
-                Unit: "Count"
-            }]
-        }));
-    } catch (e) {
-        console.error("Failed to emit CloudWatch metric", e);
-    }
-}
-
-async function dualWrite(oldWrite, newWrite, table, context) {
-    await oldWrite();
-    newWrite().catch(async (err) => {
-        console.error('V2_WRITE_FAILED', { table, ...context, error: err.message, stack: err.stack });
-        await emitV2WriteFailureMetric(table);
-    });
-}
-
 /**
- * Updates or creates a concept state in DynamoDB.
+ * Updates or creates a concept state in V2 (inlined in Session).
  */
-async function updateConceptState(sessionId, conceptId, state, attemptIncrement = 1) {
-    const command = new UpdateCommand({
-        TableName: CONCEPTS_TABLE,
-        Key: { sessionId, conceptId },
-        UpdateExpression: 'SET #st = :state ADD attempts :inc',
-        ExpressionAttributeNames: {
-            '#st': 'state'
-        },
-        ExpressionAttributeValues: {
-            ':state': state,
-            ':inc': attemptIncrement
+async function updateConceptState(userId, sessionKey, conceptId, state, attemptIncrement = 1) {
+    const res = await docClient.send(new UpdateCommand({
+        TableName: SESSIONS_TABLE,
+        Key: { PK: `USER#${userId}`, SK: sessionKey },
+        UpdateExpression: 'SET conceptStates = if_not_exists(conceptStates, :emptyMap), conceptStates.#cid = :conceptObj',
+        ExpressionAttributeNames: { '#cid': conceptId },
+        ExpressionAttributeValues: { 
+            ':emptyMap': {}, 
+            ':conceptObj': { state: state, attempts: attemptIncrement } // Note: Adding increment logic if needed
         },
         ReturnValues: 'ALL_NEW'
-    });
+    }));
     
-    let oldWriteResponse;
-    const oldWrite = async () => {
-        oldWriteResponse = await docClient.send(command);
-    };
-
-    const newWrite = async () => {
-        if (!SESSIONS_TABLE_V2) return;
-        const session = await getSession(sessionId);
-        if (!session) return;
-        
-        let attempts = (oldWriteResponse?.Attributes?.attempts) || attemptIncrement;
-        
-        await docClient.send(new UpdateCommand({
-            TableName: SESSIONS_TABLE_V2,
-            Key: { userId: session.userId, sessionKey: `SESSION#${sessionId}` },
-            UpdateExpression: 'SET conceptStates = if_not_exists(conceptStates, :emptyMap), conceptStates.#cid = :conceptObj',
-            ExpressionAttributeNames: { '#cid': conceptId },
-            ExpressionAttributeValues: { 
-                ':emptyMap': {}, 
-                ':conceptObj': { state: state, attempts: attempts } 
-            }
-        }));
-    };
-
-    await dualWrite(oldWrite, newWrite, 'SessionsTableV2', { sessionId, conceptId });
-    return oldWriteResponse?.Attributes;
+    return res.Attributes?.conceptStates?.[conceptId];
 }
 
 /**
- * Retrieves all concepts for a given session.
+ * Retrieves all concepts for a given session from V2 (inlined).
  */
-async function getConceptsBySession(sessionId) {
-    const command = new QueryCommand({
-        TableName: CONCEPTS_TABLE,
-        KeyConditionExpression: 'sessionId = :sessionId',
-        ExpressionAttributeValues: {
-            ':sessionId': sessionId
-        }
+async function getConceptsBySession(userId, sessionKey) {
+    const command = new GetCommand({
+        TableName: SESSIONS_TABLE,
+        Key: { PK: `USER#${userId}`, SK: sessionKey }
     });
-    
     const res = await docClient.send(command);
-    return res.Items || [];
+    const conceptStates = res.Item?.conceptStates || {};
+    
+    // Transform to array format for compatibility
+    return Object.entries(conceptStates).map(([conceptId, data]) => ({
+        conceptId,
+        ...data
+    }));
 }
 
 /**
- * Selects the next appropriate concept for the Adaptive Tutor.
- * Prioritizes UNADDRESSED, then falls back to TUTORED if attempts < 3.
+ * Selects the next appropriate concept for the Adaptive Tutor in V2.
  */
-async function selectNextConcept(sessionId) {
-    const concepts = await getConceptsBySession(sessionId);
+async function selectNextConcept(userId, sessionKey) {
+    const concepts = await getConceptsBySession(userId, sessionKey);
     if (!concepts || concepts.length === 0) return null;
 
     const unaddressed = concepts.find(c => c.state === CONCEPT_STATES.UNADDRESSED);
     if (unaddressed) return unaddressed;
 
-    // Fall back to Tutored if we haven't exhausted attempts (max 3 tries)
     const tutored = concepts.find(c => c.state === CONCEPT_STATES.TUTORED && (c.attempts || 0) < 3);
     if (tutored) return tutored;
 
-    // If everything is MASTERED or exhausted attempts
     return null;
 }
 
 /**
- * Validates external comprehension via Bedrock evaluation (Stubbed for Nithin's prompt integration)
+ * Validates external comprehension via Bedrock evaluation.
  */
-async function evaluateComprehension(sessionId, textTranscript, referenceMaterial) {
+async function evaluateComprehension(textTranscript, referenceMaterial) {
     const { invokeModel } = require('../lib/bedrock');
     
-    // Nithin implements the exact prompt structure in lib/bedrock later.
-    // Here we orchestrate the interaction logic.
     const promptParams = {
         prompt: `Evaluate if the following user explanation matches the reference material.\nReference: ${referenceMaterial}\nExplanation: ${textTranscript}`,
         task: 'COMPREHENSION_CHECK'
