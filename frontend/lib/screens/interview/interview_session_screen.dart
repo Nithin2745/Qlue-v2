@@ -36,6 +36,8 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
   bool _isEnding = false;
   bool _hasNavigated = false;
 
+  late VoidCallback _providerListener;
+
   @override
   void initState() {
     super.initState();
@@ -61,18 +63,18 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
         setState(() => _intensity = _intensityController.value);
       });
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final interviewProvider = context.read<InterviewProvider>();
-      interviewProvider.addListener(() {
-        if (mounted) {
-          _simulateIntensity(interviewProvider.currentPhase);
-        }
-      });
+    _providerListener = () {
+      if (mounted) {
+        _simulateIntensity(provider.currentPhase);
+      }
+    };
+    provider.addListener(_providerListener);
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
       assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
 
-      interviewProvider.initSession(
+      provider.initSession(
         type,
         resumeId: widget.resumeId,
         websiteUrl: widget.websiteUrl,
@@ -135,6 +137,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
   @override
   void dispose() {
+    context.read<InterviewProvider>().removeListener(_providerListener);
     _animationController.dispose();
     _intensityController.dispose();
     super.dispose();
@@ -172,7 +175,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     } else if (isAiSpeaking) {
       statusText = "Qlue is speaking...";
     } else if (isListening) {
-      statusText = "Listening...";
+      statusText = provider.silenceStrikes > 0 ? "Waiting for your response..." : "Listening...";
     }
 
     // Determine AI text to show at top

@@ -1,7 +1,7 @@
 /**
  * Amazon Bedrock Client Wrapper specifically tuned for Qlue's Nemotron-4-340b-instruct pipeline.
  */
-const { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { getBedrockConfig } = require('./secrets');
 const { ERROR_CODES, QlueError } = require('./errors');
@@ -18,16 +18,20 @@ const bedrockClient = new BedrockRuntimeClient({
 const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'nvidia.nemotron-super-3-120b';
 
 /**
- * Executes a Model Invocation with retries for Timeouts
+ * Executes a Model Invocation using Converse API
  */
-async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
-  const payload = Buffer.from(JSON.stringify(body));
+async function invokeModel(modelId = DEFAULT_MODEL_ID, params, options = {}) {
+  const systemPrompt = "You are Qlue, an elite technical interviewer.";
   
-  const command = new InvokeModelCommand({
-    body: payload,
+  const command = new ConverseCommand({
     modelId: modelId,
-    accept: 'application/json',
-    contentType: 'application/json'
+    messages: params.messages || [],
+    system: params.system ? [{ text: params.system }] : [{ text: systemPrompt }],
+    inferenceConfig: {
+      maxTokens: params.max_tokens || 1000,
+      temperature: params.temperature || 0.7,
+      topP: 0.9
+    }
   });
 
   const maxRetries = options.retries || 2;
@@ -37,18 +41,14 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
     try {
       const response = await bedrockClient.send(command);
       
-      let responseBody = JSON.parse(Buffer.from(response.body).toString('utf-8'));
-      
-      // Normalize response format across models (Claude vs Nemotron)
-      if (responseBody.choices && responseBody.choices[0].message) {
-        responseBody.content = [{ text: responseBody.choices[0].message.content }];
-      } else if (responseBody.choices && responseBody.choices[0].text) {
-        responseBody.content = [{ text: responseBody.choices[0].text }];
-      }
+      // Standardize response format
+      const responseBody = {
+        content: [{ text: response.output.message.content[0].text }],
+        usage: response.usage
+      };
 
       if (options.logTokens) {
-        // Log tokens usage
-        console.info(`[Bedrock Tokens] Prompt: ${responseBody.usage?.prompt_tokens || '?'}, Completion: ${responseBody.usage?.completion_tokens || '?'}`);
+        console.info(`[Bedrock Tokens] Input: ${responseBody.usage?.inputTokens || '?'}, Output: ${responseBody.usage?.outputTokens || '?'}`);
       }
 
       return responseBody;
@@ -72,12 +72,18 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
  * @param {object} body 
  * @param {function} onToken Callback for each received token
  */
-async function invokeModelStream(modelId = DEFAULT_MODEL_ID, body, onToken) {
-    const command = new InvokeModelWithResponseStreamCommand({
-        body: JSON.stringify(body),
+async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
+    const systemPrompt = "You are Qlue, an elite technical interviewer.";
+
+    const command = new ConverseStreamCommand({
         modelId,
-        contentType: 'application/json',
-        accept: 'application/json'
+        messages: params.messages || [],
+        system: params.system ? [{ text: params.system }] : [{ text: systemPrompt }],
+        inferenceConfig: {
+            maxTokens: params.max_tokens || 1000,
+            temperature: params.temperature || 0.7,
+            topP: 0.9
+        }
     });
 
     try {
@@ -89,7 +95,7 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, body, onToken) {
             isTimedOut = true;
         }, 15000);
 
-        for await (const event of response.body) {
+        for await (const event of response.stream) {
             if (isTimedOut) {
                 throw new Error("BEDROCK_TIMEOUT");
             }
@@ -99,15 +105,8 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, body, onToken) {
                 isTimedOut = true;
             }, 15000);
 
-            const chunk = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
-            
-            // Nemotron / OpenAI format
-            if (chunk.choices && chunk.choices[0].delta?.content) {
-                const token = chunk.choices[0].delta.content;
-                fullText += token;
-                if (onToken) onToken(token);
-            } else if (chunk.choices && chunk.choices[0].text) {
-                const token = chunk.choices[0].text;
+            if (event.contentBlockDelta) {
+                const token = event.contentBlockDelta.delta.text;
                 fullText += token;
                 if (onToken) onToken(token);
             }
@@ -227,6 +226,57 @@ Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`
   };
 }
 
+function buildResumeQuestionPrompt(resumeData, history, turnCount) {
+  const systemContent = `You are Qlue, an elite technical interviewer. You are conducting an interview based on the following resume data:
+${typeof resumeData === 'object' ? JSON.stringify(resumeData) : resumeData}
+
+Instructions:
+- Ask exactly one concise technical question.
+- Do not evaluate the previous answer.
+- Focus on specific technologies or projects mentioned in the resume.
+- Return ONLY the question text (or a JSON with "question" field if required by the caller).`;
+
+  const messages = [
+    ...history,
+    { role: 'user', content: turnCount === 0 ? "Let's begin the interview." : "Generate the next technical question." }
+  ];
+  return { system: systemContent, messages };
+}
+
+function buildHRQuestionPrompt(context, history) {
+  const systemContent = `You are an HR recruiter. Ask one concise behavioral question using the STAR framework. Do not evaluate the previous answer.`;
+  const messages = [
+    ...history,
+    { role: 'user', content: "Generate the next behavioral question." }
+  ];
+  return { system: systemContent, messages };
+}
+
+function buildWebsiteTeachPrompt(targetConcept, content, history, isEvaluation) {
+  const systemContent = `You are a tutor helping a student learn about ${targetConcept} from this content:
+${content.substring(0, 5000)}
+
+Instructions:
+- If isEvaluation is true, check the last answer and provide feedback.
+- Ask a follow-up question to test understanding.
+- Return response as JSON: {"response": "your feedback and next question", "isCorrect": true/false}`;
+
+  const messages = [
+    ...history,
+    { role: 'user', content: isEvaluation ? "Evaluate my response and ask the next question." : `Introduce ${targetConcept} and ask a question.` }
+  ];
+  return { system: systemContent, messages };
+}
+
+function buildSelfIntroEvalPrompt(transcript) {
+  return {
+    system: "You are an expert communication coach. Evaluate the self-introduction provided.",
+    messages: [
+      { role: 'user', content: `Introduction to evaluate: ${transcript}` }
+    ]
+  };
+}
+
 module.exports = {
   invokeModel,
   buildInterviewPrompt,
@@ -234,5 +284,9 @@ module.exports = {
   buildScoringPrompt,
   buildFeedbackPrompt,
   buildConceptExtractionPrompt,
+  buildResumeQuestionPrompt,
+  buildHRQuestionPrompt,
+  buildWebsiteTeachPrompt,
+  buildSelfIntroEvalPrompt,
   invokeModelStream
 };

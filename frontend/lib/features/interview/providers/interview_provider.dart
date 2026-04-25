@@ -248,6 +248,7 @@ class InterviewProvider extends ChangeNotifier {
         _stopListening();
         break;
       case 'SILENCE_DETECTED':
+        currentPhase = InterviewPhase.listening; // Ensure we stay in listening phase
         _silenceStrikes++;
         if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
           isSessionEnded = true;
@@ -326,7 +327,7 @@ class InterviewProvider extends ChangeNotifier {
           notifyListeners();
         },
         onFinal: (text) {
-          if (currentPhase != InterviewPhase.listening) return;
+          // REMOVED: Phase guard to prevent dropping transcripts if state changed quickly
           partialTranscript = "";
           isListening = false;
           _stopSilenceTimer();

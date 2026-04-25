@@ -36,18 +36,27 @@ exports.handler = async (event) => {
             const deadlockTime = Date.now() - new Date(session.updatedAt || session.startTime).getTime();
             if (deadlockTime > 60 * 1000) {
                 // Recover the session silently
-                return success({ // FIX: use success() wrapper
-                    sessionId,
-                    nextAIResponse: "Sorry, I lost my train of thought. Let's continue where we left off.",
-                    state: INTERVIEW_STATES.AI_SPEAKING,
-                    message: 'Recovered from Deadlock.'
-                });
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify({
+                        success: true,
+                        data: {
+                            sessionId,
+                            nextAIResponse: "Sorry, I lost my train of thought. Let's continue where we left off.",
+                            state: INTERVIEW_STATES.AI_SPEAKING,
+                            message: 'Recovered from Deadlock.'
+                        }
+                    })
+                };
             }
         }
 
         if (session.currentState !== INTERVIEW_STATES.USER_RESPONDING && session.currentState !== INTERVIEW_STATES.PROCESSING_RESPONSE) {
             throw new Error(`Cannot process input while in state: ${session.currentState}`);
         }
+
+        // --- 0. INITIAL TRANSITION ---
+        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
 
         // --- 1. SILENCE NEGOTIATION W/ RETRIES ---
         if (isSilence) {
@@ -56,7 +65,8 @@ exports.handler = async (event) => {
             
             // Strike 3 = Timeout Terminal State
             if (silRetries >= 3) {
-                return await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'SILENCE_TIMEOUT' }) });
+                const termRes = await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'SILENCE_TIMEOUT' }) });
+                return termRes;
             }
 
             // Fallback / Active Checks
@@ -70,19 +80,20 @@ exports.handler = async (event) => {
             return {
                 statusCode: 200,
                 body: JSON.stringify({
-                    sessionId,
-                    nextAIResponse: retryMessage,
-                    state: INTERVIEW_STATES.AI_SPEAKING,
-                    silenceRetries: silRetries,
-                    message: 'Silence protocol engaged. Retrying.'
+                    success: true,
+                    data: {
+                        sessionId,
+                        nextAIResponse: retryMessage,
+                        state: INTERVIEW_STATES.AI_SPEAKING,
+                        silenceRetries: silRetries,
+                        message: 'Silence protocol engaged. Retrying.'
+                    }
                 })
             };
         }
 
 
         // --- 2. STANDARD PROCESS PIPELINE ---
-        
-        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
 
         if (session.silenceRetries > 0) {
             await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.PROCESSING_RESPONSE, { silenceRetries: 0 });
@@ -124,7 +135,8 @@ exports.handler = async (event) => {
         const sessionAgeMs = Date.now() - new Date(session.startTime).getTime();
         if (sessionAgeMs > 15 * 60 * 1000) {
             await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.PROCESSING_RESPONSE, { accumulatedScores: newAccumulated });
-            return await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'TIME_LIMIT' }) });
+            const termRes = await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'TIME_LIMIT' }) });
+            return termRes;
         }
 
         // --- 5. GENERATE NEXT RESPONSE (Specialized for Tutor Mode) ---

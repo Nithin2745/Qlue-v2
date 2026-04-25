@@ -333,23 +333,47 @@ async function handleTextTranscript(connectionId, body) {
     return { statusCode: 200 };
   }
 
-  // 1. Save user transcript
-  await saveTranscript(sessionId, session.turnCount || 0, SPEAKERS.USER, text);
+  // 1. Save user transcript (moved to processUserInput, but keeping here for legacy if needed, 
+  // actually processUserInput also saves it, so we can remove it from here to avoid double save)
+  // await saveTranscript(sessionId, session.turnCount || 0, SPEAKERS.USER, text);
 
-  // 2. Advance turn count in DB
-  const nextTurnCount = (session.turnCount || 0) + 1;
-  await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, null, {
-    turnCount: nextTurnCount
+  // 2. Call business logic (NO state transition here)
+  const processRes = await processUserInput.handler({ 
+    body: JSON.stringify({ 
+      sessionId, 
+      textTranscript: text 
+    }) 
   });
 
-  // 3. Build history with new user message
+  // 3. Handle failure gracefully
+  if (processRes.statusCode !== 200) {
+    const errorBody = JSON.parse(processRes.body);
+    // Push error to client
+    await postToConnection(connectionId, { 
+      type: 'error', 
+      payload: { message: errorBody.error || 'Processing failed' } 
+    });
+    return { statusCode: 200 }; // Handled
+  }
+
+  // 4. Extract data safely
+  const processBody = JSON.parse(processRes.body);
+  const data = processBody.data || processBody; 
+  const nextAIResponse = data.nextAIResponse;
+  const onlyQuestion = data.onlyQuestion || nextAIResponse;
+
+  if (!nextAIResponse) {
+    throw new Error('No AI response generated');
+  }
+
+  // 5. Build prompt for streaming
+  // We need to rebuild history AFTER processUserInput saved the new transcript
   const transcripts = await getTranscriptBySession(sessionId);
   const history = transcripts.map(t => ({
     role: t.speaker === 'USER' ? 'user' : 'assistant',
     content: t.text
   }));
 
-  // 4. Build prompt
   let prompt = [];
   if (session.moduleType === 'WEBSITE') {
     prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, text);
@@ -364,15 +388,18 @@ async function handleTextTranscript(connectionId, body) {
       const resume = await getResumeById(resumeId);
       context = resume?.parsedData || context;
     }
-    prompt = buildInterviewPrompt(context, history, nextTurnCount, session.moduleType);
+    prompt = buildInterviewPrompt(context, history, session.turnCount + 1, session.moduleType);
   }
 
-  // 5. Push state and stream response
-  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, nextTurnCount, "AI is generating next question.");
+  // 6. Push state and stream response
+  // Note: processUserInput already advanced the state in DB to AI_SPEAKING or similar
+  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, session.turnCount + 1, "AI is generating next question.");
 
-  const updatedSession = await getSession(sessionId); // REFRESH
+  const updatedSession = await getSession(sessionId); 
 
   await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
+
+  return { statusCode: 200 };
 
   return { statusCode: 200 };
 }

@@ -64,7 +64,10 @@ exports.handler = async (event) => {
                     const parsedData = resume?.parsedData;
                     if (parsedData) {
                         const prompt = buildResumeQuestionPrompt(parsedData, history, turnCount);
-                        const bedrockResult = await invokeModel(undefined, { messages: prompt });
+                        const bedrockResult = await invokeModel(undefined, { 
+                            system: prompt.system,
+                            messages: prompt.messages 
+                        });
                         if (bedrockResult.content?.[0]?.text) {
                             try {
                                 const parsed = JSON.parse(bedrockResult.content[0].text);
@@ -108,9 +111,10 @@ exports.handler = async (event) => {
                         // This is the core logic: Passing the FULL parsedData to Bedrock
                         const prompt = buildResumeQuestionPrompt(parsedData, history, turnCount);
                         
-                        // Invoke Bedrock with Nemotron-4-340b
+                        // Invoke Bedrock with Converse API
                         const bedrockResult = await invokeModel(undefined, { 
-                            messages: prompt,
+                            system: prompt.system,
+                            messages: prompt.messages,
                             max_tokens: 500,
                             temperature: 0.7
                         });
@@ -166,7 +170,10 @@ exports.handler = async (event) => {
             } else {
                 // Default HR / Behavioral
                 const prompt = buildHRQuestionPrompt("Professional Background", history);
-                const bedrockResult = await invokeModel(undefined, { messages: prompt });
+                const bedrockResult = await invokeModel(undefined, { 
+                    system: prompt.system,
+                    messages: prompt.messages 
+                });
                 
                 if (bedrockResult.content?.[0]?.text) {
                     try {
