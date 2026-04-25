@@ -382,7 +382,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
             } else if (_selectedResume == null) {
               _showResumePopup();
             } else {
-              context.push('/interview/session/new?resumeId=${_selectedResume!.resumeId}');
+              context.push('/interview/session/new?moduleType=RESUME&resumeId=${_selectedResume!.resumeId}');
             }
           },
         ),
@@ -394,7 +394,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
           "Analyze your culture fit.",
           "HR",
           "assets/images/hr.png",
-          onStartTap: () => context.push('/interview/session/new?type=HR'),
+          onStartTap: () => context.push('/interview/session/new?moduleType=HR'),
         ),
       ],
     );
@@ -455,7 +455,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
 
               if (response.data['isEducational'] == true) {
                 if (mounted) {
-                  context.push('/interview/session/new?websiteUrl=${Uri.encodeComponent(url)}');
+                  context.push('/interview/session/new?moduleType=WEBSITE&websiteUrl=${Uri.encodeComponent(url)}');
                 }
               } else {
                 if (mounted) {
@@ -477,7 +477,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
           "Evaluate clarity and delivery.",
           "Intro",
           "assets/images/SelfIntro.png",
-          onStartTap: () => context.push('/interview/session/new?type=INTRO'),
+          onStartTap: () => context.push('/interview/session/new?moduleType=SELF_INTRO'),
         ),
       ],
     );

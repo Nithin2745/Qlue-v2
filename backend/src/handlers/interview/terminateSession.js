@@ -13,8 +13,10 @@ exports.handler = async (event) => {
         const session = await getSession(sessionId);
         if (!session) throw new Error('Session not found');
 
-        // Transition to GENERATING_FEEDBACK
-        await transitionState(sessionId, INTERVIEW_STATES.GENERATING_FEEDBACK);
+        // Transition to GENERATING_FEEDBACK for Interview Modules only
+        if (session.moduleType !== 'WEBSITE') {
+            await transitionState(sessionId, INTERVIEW_STATES.GENERATING_FEEDBACK);
+        }
 
         // Define Closing Statement based on Reason
         let closingStatement = "Thank you for your time. That concludes our interview.";

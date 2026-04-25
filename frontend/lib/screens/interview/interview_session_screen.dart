@@ -13,12 +13,14 @@ class InterviewSessionScreen extends StatefulWidget {
   final String? interviewId;
   final String? resumeId;
   final String? websiteUrl;
+  final String? moduleType;
 
   const InterviewSessionScreen({
     super.key, 
     this.interviewId,
     this.resumeId,
     this.websiteUrl,
+    this.moduleType,
   });
 
   @override
@@ -35,6 +37,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
   
   Offset? _tapOffset;
   double _lastTapTime = 0;
+  bool _isEnding = false;
 
   @override
   void initState() {
@@ -64,13 +67,21 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
         }
       });
 
-      final type = widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR');
+      final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
+      assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'SELF_INTRO', 'Invalid moduleType');
+
       interviewProvider.initSession(
         type, 
         resumeId: widget.resumeId,
         websiteUrl: widget.websiteUrl,
       );
     });
+  }
+
+  void _handleEnd(InterviewProvider provider) async {
+    if (_isEnding) return;
+    setState(() => _isEnding = true);
+    await provider.endSession();
   }
 
   void _handleTap(TapDownDetails details, BoxConstraints constraints) {
@@ -113,10 +124,18 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     final t = AppThemeColors.of(context);
     final provider = context.watch<InterviewProvider>();
     
+    final isTutor = provider.moduleType == 'WEBSITE';
+
     // Auto-End Navigation
     if (provider.isSessionEnded) {
        WidgetsBinding.instance.addPostFrameCallback((_) {
-         if (mounted) context.pushReplacement('/feedback/${provider.sessionId}');
+         if (mounted) {
+           if (isTutor) {
+             context.go('/dashboard');
+           } else {
+             context.pushReplacement('/feedback/${provider.sessionId}');
+           }
+         }
        });
     }
 
@@ -184,8 +203,35 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
+                        if (isTutor)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.teal.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.teal.withValues(alpha: 0.3)),
+                            ),
+                            child: const Text(
+                              "TUTOR MODE",
+                              style: TextStyle(color: Colors.teal, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          )
+                        else
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: t.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: t.primary.withValues(alpha: 0.3)),
+                            ),
+                            child: Text(
+                              "INTERVIEW MODE",
+                              style: TextStyle(color: t.primary, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        const Spacer(),
                         GestureDetector(
-                          onTap: () => provider.endSession(),
+                          onTap: _isEnding ? null : () => _handleEnd(provider),
                           child: SizedBox(
                             width: 80,
                             height: 44,
@@ -250,9 +296,9 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                                 fontSize: isAiSpeaking && provider.isStreamingText ? 16 : 18,
                                 fontFamily: 'monospace', 
                                 fontWeight: FontWeight.w700,
-                                color: isAiSpeaking && provider.isStreamingText
+                                color: isTutor ? Colors.tealAccent : (isAiSpeaking && provider.isStreamingText
                                   ? t.primary.withValues(alpha: 0.9) // Highlighted subtitle during speech
-                                  : Colors.white, // White for final question
+                                  : Colors.white), // White for final question
                                 height: 1.3,
                                 letterSpacing: -0.8,
                               ),
@@ -276,8 +322,20 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                   child: SizedBox(
                     width: 320,
                     height: 320,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
+                    child: _isEnding 
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const CircularProgressIndicator(color: Colors.white),
+                            const SizedBox(height: 20),
+                            Text(
+                              isTutor ? "Closing Session..." : "Generating your interview feedback...",
+                              style: const TextStyle(color: Colors.white, fontSize: 12, fontFamily: 'monospace'),
+                            ),
+                          ],
+                        )
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
                         return GestureDetector(
                           onTapDown: (details) => _handleTap(details, constraints),
                           child: RepaintBoundary(

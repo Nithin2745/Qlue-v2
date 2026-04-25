@@ -8,7 +8,7 @@ const generateQuestion = require('../interview/generateQuestion');
 const processUserInput = require('../interview/processUserInput');
 const terminateSession = require('../interview/terminateSession');
 const { synthesizeToBase64Chunks } = require('../../lib/polly');
-const { invokeModelStream, buildResumeQuestionPrompt, buildHRQuestionPrompt, buildWebsiteTeachPrompt } = require('../../lib/bedrock');
+const { invokeModelStream, buildInterviewPrompt, buildTutorPrompt } = require('../../lib/bedrock');
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
 
@@ -107,20 +107,17 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
 
         lastProcessPromise = lastProcessPromise.then(async () => {
             try {
-                let allAudio = Buffer.alloc(0);
                 const engine = session.itemData?.engine || 'generative';
                 for await (const audioChunk of synthesizeToBase64Chunks(cleanSentence, { VoiceId: pollyVoice, Engine: engine })) {
-                    allAudio = Buffer.concat([allAudio, Buffer.from(audioChunk.audioData, 'base64')]);
+                    await postToConnection(connectionId, {
+                        type: 'tts_audio_chunk',
+                        payload: {
+                            chunkIndex: globalAudioChunkIndex++,
+                            audioData: audioChunk.audioData,
+                            isLast: false
+                        }
+                    });
                 }
-
-                await postToConnection(connectionId, {
-                    type: 'tts_audio_chunk',
-                    payload: {
-                        chunkIndex: globalAudioChunkIndex++,
-                        audioData: allAudio.toString('base64'),
-                        isLast: false
-                    }
-                });
             } catch (err) {
                 console.error('Sentence processing failed:', err);
                 // Notify frontend that audio synthesis failed for this sentence
@@ -135,6 +132,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
                 throw err;
             }
         });
+        return lastProcessPromise;
     };
 
     try {
@@ -160,7 +158,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             
             const introText = intros[moduleType] || `Hello! I'm ${voiceName}, your AI interviewer. Let's begin our session.`;
             console.debug(`[Stream] Sending instant intro to hide latency.`);
-            processSentence(introText);
+            await processSentence(introText);
         }
 
         await invokeModelStream(undefined, { messages: prompt }, async (token) => {
@@ -223,6 +221,11 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             }
         });
 
+        await postToConnection(connectionId, {
+            type: 'ai_speaking_complete',
+            payload: { sessionId, turnIndex: session.turnCount }
+        });
+
         console.info(`[Stream] Sequential processing complete.`);
 
         // Final UI text sync
@@ -253,6 +256,14 @@ async function handleSessionInit(connectionId, body) {
     const session = await getSession(sessionId);
     if (!session) throw new Error('Session not found');
 
+    if (moduleType && session.moduleType !== moduleType) {
+        await postToConnection(connectionId, {
+            type: 'error',
+            payload: { message: 'MODULE_MISMATCH', code: 'MODULE_MISMATCH' }
+        });
+        throw new Error('MODULE_MISMATCH');
+    }
+
     const userId = session.userId;
     const transcripts = await getTranscriptBySession(sessionId);
     const history = transcripts.map(t => ({
@@ -262,18 +273,20 @@ async function handleSessionInit(connectionId, body) {
 
     // Build Prompt
     let prompt = [];
-    if (session.moduleType === 'RESUME') {
-        let resumeId = session.itemData?.resumeId;
-        if (!resumeId) {
-            const user = await getUserById(userId);
-            resumeId = user.activeResumeId;
-        }
-        const resume = await getResumeById(resumeId);
-        prompt = buildResumeQuestionPrompt(resume?.parsedData, history, 0);
-    } else if (session.moduleType === 'WEBSITE') {
-        prompt = buildWebsiteTeachPrompt(session.itemData?.websiteUrl, "", history, false);
+    if (session.moduleType === 'WEBSITE') {
+        prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, "");
     } else {
-        prompt = buildHRQuestionPrompt("Professional Background", history);
+        let context = "Professional Background";
+        if (session.moduleType === 'RESUME') {
+            let resumeId = session.itemData?.resumeId;
+            if (!resumeId) {
+                const user = await getUserById(userId);
+                resumeId = user.activeResumeId;
+            }
+            const resume = await getResumeById(resumeId);
+            context = resume?.parsedData || context;
+        }
+        prompt = buildInterviewPrompt(context, history, 0, session.moduleType);
     }
 
     // Push state update to transition UI
@@ -311,18 +324,20 @@ async function handleTextTranscript(connectionId, body) {
 
   // 4. Build prompt
   let prompt = [];
-  if (session.moduleType === 'RESUME') {
-    let resumeId = session.itemData?.resumeId;
-    if (!resumeId) {
-      const user = await getUserById(session.userId);
-      resumeId = user.activeResumeId;
-    }
-    const resume = await getResumeById(resumeId);
-    prompt = buildResumeQuestionPrompt(resume?.parsedData, history, nextTurnCount);
-  } else if (session.moduleType === 'WEBSITE') {
-    prompt = buildWebsiteTeachPrompt("", "", history, true);
+  if (session.moduleType === 'WEBSITE') {
+    prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, text);
   } else {
-    prompt = buildHRQuestionPrompt("Professional Background", history);
+    let context = "Professional Background";
+    if (session.moduleType === 'RESUME') {
+      let resumeId = session.itemData?.resumeId;
+      if (!resumeId) {
+        const user = await getUserById(session.userId);
+        resumeId = user.activeResumeId;
+      }
+      const resume = await getResumeById(resumeId);
+      context = resume?.parsedData || context;
+    }
+    prompt = buildInterviewPrompt(context, history, nextTurnCount, session.moduleType);
   }
 
   // 5. Push state and stream response

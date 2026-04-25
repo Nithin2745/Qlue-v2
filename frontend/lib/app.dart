@@ -130,11 +130,13 @@ GoRouter buildAppRouter(AuthProvider authProvider) {
           final sessionId = state.pathParameters['sessionId']!;
           final resumeId = state.uri.queryParameters['resumeId'];
           final websiteUrl = state.uri.queryParameters['websiteUrl'];
+          final moduleType = state.uri.queryParameters['moduleType'];
           
           return InterviewSessionScreen(
             interviewId: sessionId,
             resumeId: resumeId,
             websiteUrl: websiteUrl,
+            moduleType: moduleType,
           );
         },
       ),

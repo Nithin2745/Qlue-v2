@@ -83,8 +83,22 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, body, onToken) {
     try {
         const response = await bedrockClient.send(command);
         let fullText = "";
+        let isTimedOut = false;
+        
+        let timeoutTimer = setTimeout(() => {
+            isTimedOut = true;
+        }, 15000);
 
         for await (const event of response.body) {
+            if (isTimedOut) {
+                throw new Error("BEDROCK_TIMEOUT");
+            }
+            // Reset timer on token received
+            clearTimeout(timeoutTimer);
+            timeoutTimer = setTimeout(() => {
+                isTimedOut = true;
+            }, 15000);
+
             const chunk = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
             
             // Nemotron / OpenAI format
@@ -98,87 +112,63 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, body, onToken) {
                 if (onToken) onToken(token);
             }
         }
+        clearTimeout(timeoutTimer);
         return fullText;
     } catch (error) {
         console.error('Bedrock Streaming Error:', error);
-        throw new QlueError('Bedrock Streaming Error', ERROR_CODES.BEDROCK_ERROR, 500, error.message);
+        if (error.message === 'BEDROCK_TIMEOUT' || error.name === 'TimeoutError') {
+            throw new QlueError('Bedrock stream timed out after 15 seconds of inactivity.', 'BEDROCK_TIMEOUT', 504, error.message);
+        }
+        throw new QlueError('Bedrock Streaming Error', 'BEDROCK_ERROR', 500, error.message);
     }
 }
 
 
 /**
- * Builds the system prompt for Resume technical questions
+ * Builds the system prompt for Interview Modes (RESUME, HR, SELF_INTRO)
  */
-function buildResumeQuestionPrompt(parsedData, conversationHistory, turnIndex) {
+function buildInterviewPrompt(context, history, turnCount, moduleType) {
+  let systemContent = "";
+  if (moduleType === 'RESUME') {
+    systemContent = `You are an expert technical interviewer. You are conducting an interview based on the following candidate context:
+${typeof context === 'object' ? JSON.stringify(context) : context}
+
+Your goal is to ask one concise technical question.
+Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
+Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+  } else if (moduleType === 'HR') {
+    systemContent = `You are an HR recruiter.
+Please ask one concise behavioral question using the STAR framework.
+Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
+Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+  } else if (moduleType === 'SELF_INTRO') {
+    systemContent = `You are an expert communication coach conducting a self-introduction exercise.
+Ask one concise follow-up question regarding their introduction to probe deeper.
+Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
+Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+  } else {
+    systemContent = `You are an interviewer. Ask one concise question. Do not evaluate the answer. Wait for the user to respond.`;
+  }
+
   return [
-    {
-      role: 'system',
-      content: `You are an expert technical interviewer. You are conducting an interview based on the following candidate resume parsing:
-${JSON.stringify(parsedData)}
-Your goal is to ask a targeted, challenging technical question about their experience. Keep your question concise.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`
-    },
-    ...conversationHistory
+    { role: 'system', content: systemContent },
+    ...history
   ];
 }
 
 /**
- * Builds the system prompt for HR STAR format behavioral questions
+ * Builds the system prompt for Tutor Mode (WEBSITE)
  */
-function buildHRQuestionPrompt(topic, conversationHistory) {
+function buildTutorPrompt(websiteUrl, history, userAnswer) {
   return [
-    {
-      role: 'system',
-      content: `You are an HR recruiter. We are discussing the topic: ${topic}.
-Please ask a behavioral question using the STAR (Situation, Task, Action, Result) framework. Keep it concise.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`
+    { 
+      role: 'system', 
+      content: `You are a tutor. The user is learning about content from this website: ${websiteUrl}.
+Check the user's answer for correctness. If it's incorrect or incomplete, explain their mistakes gently and provide the right approach. Then, ask the next question.
+If they are correct, confirm it and proceed to the next concept.
+Return ONLY your response text (the verification/guidance and the next question), no JSON or extra formatting. Your response will be spoken directly to the user.` 
     },
-    ...conversationHistory
-  ];
-}
-
-/**
- * Builds the system prompt for Website conceptual teaching
- */
-function buildWebsiteTeachPrompt(concept, content, conversationHistory, isAnswering = false) {
-  const systemPrompt = isAnswering
-    ? `You are an expert mentor helping the user understand the website content provided below.
-Content: ${content}
-Currently, you are explaining the concept: "${concept}".
-
-The user has just answered your question.
-1. Evaluate the user's answer.
-2. If CORRECT: Give a warm compliment and proceed to ask the next logical question or explain the next nuance of ${concept}.
-3. If WRONG: Explain the concept correctly in simple words (2-3 lines max) and ask: "Did you understand?". Be supportive and behave like a mentor.
-Format your output strictly as a JSON object: {"response": "Your mentor response", "isCorrect": boolean}`
-    : `You are an expert mentor teaching the user about the website content provided below.
-Content: ${content}
-Goal: Teach the concept: "${concept}".
-Ask an initial question or provide a brief overview to start the conversation about "${concept}".
-Return ONLY the response text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
-
-  return [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory
-  ];
-}
-
-/**
- * Builds the system prompt for evaluating Self-Introductions
- */
-function buildSelfIntroEvalPrompt(transcript) {
-  return [
-    {
-      role: 'system',
-      content: `You are an expert communication coach. The user just gave their self-introduction.
-Please evaluate their response. 
-1. Acknowledge their effort.
-2. Identify exactly what is lacking (e.g., missing achievements, lack of structure, weak opening).
-3. Provide 2-3 actionable suggestions to make it better.
-Keep the tone encouraging.
-Format your output strictly as a JSON object: {"response": "Your coaching feedback and suggestions"}`
-    },
-    { role: 'user', content: transcript }
+    ...history
   ];
 }
 
@@ -239,10 +229,8 @@ Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`
 
 module.exports = {
   invokeModel,
-  buildResumeQuestionPrompt,
-  buildHRQuestionPrompt,
-  buildWebsiteTeachPrompt,
-  buildSelfIntroEvalPrompt,
+  buildInterviewPrompt,
+  buildTutorPrompt,
   buildScoringPrompt,
   buildFeedbackPrompt,
   buildConceptExtractionPrompt,

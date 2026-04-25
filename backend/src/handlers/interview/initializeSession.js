@@ -23,15 +23,23 @@ exports.handler = async (event) => {
         console.debug(`Checking for active sessions for ${userId}...`);
         const activeSession = await getActiveSessionForUser(userId);
         if (activeSession) {
-            console.warn(`Concurrent session detected for ${userId}: ${activeSession.sessionId}`);
-            return {
-                statusCode: 409,
-                body: JSON.stringify({
-                    error: 'ConcurrentSessionError',
-                    message: 'User already has an active interview session.',
-                    activeSessionId: activeSession.sessionId
-                })
-            };
+            if (body.force) {
+                console.info(`Force terminating existing session ${activeSession.sessionId} for ${userId}`);
+                const terminateSession = require('./terminateSession');
+                await terminateSession.handler({
+                    body: JSON.stringify({ sessionId: activeSession.sessionId, reason: 'USER_INITIATED' })
+                });
+            } else {
+                console.warn(`Concurrent session detected for ${userId}: ${activeSession.sessionId}`);
+                return {
+                    statusCode: 409,
+                    body: JSON.stringify({
+                        error: 'ConcurrentSessionError',
+                        message: 'User already has an active interview session.',
+                        activeSessionId: activeSession.sessionId
+                    })
+                };
+            }
         }
 
         const sessionId = randomUUID();

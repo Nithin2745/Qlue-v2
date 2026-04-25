@@ -78,6 +78,7 @@ class InterviewProvider extends ChangeNotifier {
           if (websiteUrl != null) 'websiteUrl': websiteUrl,
           'voiceId': voiceId,
           'engine': engine,
+          'force': true,
         },
       );
 
@@ -132,9 +133,16 @@ class InterviewProvider extends ChangeNotifier {
           _ttsService.playBase64Chunk(base64Data, isLast);
         }
 
-        // If last chunk arrived and nothing is playing/queued, transition immediately
-        if (isLast && !_ttsService.isPlaying && _ttsService.queue.isEmpty) {
-          onAudioPlaybackComplete();
+        // Transitioning is now handled by ai_speaking_complete
+        break;
+
+      case 'ai_speaking_complete':
+        if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
+          currentPhase = InterviewPhase.listening;
+          subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
+          isStreamingText = false;
+          notifyListeners();
+          _startListening();
         }
         break;
 
@@ -209,14 +217,7 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void onAudioPlaybackComplete() {
-    if (!isSessionEnded && currentPhase == InterviewPhase.speaking && _isLastAudioChunkReceived) {
-      currentPhase = InterviewPhase.listening;
-      // When AI finishes, subtitle becomes the final question
-      subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
-      isStreamingText = false;
-      notifyListeners();
-      _startListening();
-    }
+    // Empty: the backend 'ai_speaking_complete' message controls turn transitions now.
   }
 
   void sendTextTranscript(String text) {
@@ -256,11 +257,13 @@ class InterviewProvider extends ChangeNotifier {
     _resetSilenceTimer();
     _sttService.startListening(
       onPartial: (text) {
+        if (currentPhase != InterviewPhase.listening) return;
         partialTranscript = text;
         _resetSilenceTimer();
         notifyListeners();
       },
       onFinal: (text) {
+        if (currentPhase != InterviewPhase.listening) return;
         partialTranscript = "";
         isListening = false;
         _stopSilenceTimer();
