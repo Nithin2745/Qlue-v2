@@ -1,11 +1,12 @@
 const { docClient } = require('../lib/dynamodb');
 const { PutCommand, UpdateCommand, GetCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
-const { CloudWatchClient, PutMetricDataCommand } = require("@aws-sdk/client-cloudwatch");
 
-const cloudwatch = new CloudWatchClient({});
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE;
+const SESSION_PREFIX = 'SESSION#';
 
-const SESSIONS_TABLE = process.env.SESSIONS_TABLE || "Sessions";
-const SESSIONS_TABLE_V2 = process.env.SESSIONS_TABLE_V2;
+function getUserPk(userId) {
+    return `USER#${userId}`;
+}
 
 const INTERVIEW_STATES = {
     INITIALIZING: "INITIALIZING",
@@ -19,110 +20,74 @@ const INTERVIEW_STATES = {
     ERROR: "ERROR"
 };
 
-async function emitV2WriteFailureMetric(tableName) {
-    try {
-        await cloudwatch.send(new PutMetricDataCommand({
-            Namespace: "Qlue/DatabaseMigration",
-            MetricData: [{
-                MetricName: "v2_write_failure",
-                Dimensions: [{ Name: "TableName", Value: tableName }],
-                Value: 1,
-                Unit: "Count"
-            }]
-        }));
-    } catch (e) {
-        console.error("Failed to emit CloudWatch metric", e);
-    }
-}
-
-async function dualWrite(oldWrite, newWrite, table, context) {
-    await oldWrite();
-    newWrite().catch(async (err) => {
-        console.error('V2_WRITE_FAILED', { table, ...context, error: err.message, stack: err.stack });
-        await emitV2WriteFailureMetric(table);
-    });
-}
-
 /**
- * Creates a new interview session in DynamoDB.
+ * Creates a new interview session in V2 DynamoDB.
  */
 async function createSession(sessionId, userId, moduleType, itemData = {}) {
     const now = new Date().toISOString();
     const session = {
-        sessionId,
+        PK: getUserPk(userId),
+        SK: `${SESSION_PREFIX}${sessionId}`,
         userId,
+        sessionKey: `${SESSION_PREFIX}${sessionId}`,
+        sessionId,
         moduleType,
-        itemData, // [Mouli Week 4: Context Injection] Store resumeId/websiteUrl context
+        itemData, 
         voiceId: itemData.voiceId || 'Tiffany',
         currentState: INTERVIEW_STATES.INITIALIZING,
         turnCount: 0,
-        startTime: now,
-        updatedAt: now, // FIX: added
+        startedAt: now,
+        updatedAt: now,
         silenceRetries: 0,
         accumulatedScores: {},
         version: 1,
-        activeMarker: "ACTIVE" // Used for Sparse GSI pattern
+        statusKey: `active#${now}`,
+        contextWindow: [],
+        conceptStates: {}
     };
 
-    const oldWrite = () => docClient.send(new PutCommand({
+    await docClient.send(new PutCommand({
         TableName: SESSIONS_TABLE,
         Item: session,
     }));
 
-    const newWrite = async () => {
-        if (!SESSIONS_TABLE_V2) return;
-        const sessionV2 = {
-            ...session,
-            sessionKey: `SESSION#${sessionId}`,
-            startedAt: now,
-            statusKey: `active#${now}` // sparse index SessionStatusIndex
-        };
-        await docClient.send(new PutCommand({
-            TableName: SESSIONS_TABLE_V2,
-            Item: sessionV2
-        }));
-    };
-
-    await dualWrite(oldWrite, newWrite, 'SessionsTableV2', { sessionId, userId });
     return session;
 }
 
 /**
- * Retrieves a session by its ID.
+ * Retrieves a session by its ID using V2 GSI.
  */
 async function getSession(sessionId) {
-    const command = new GetCommand({
+    const command = new QueryCommand({
         TableName: SESSIONS_TABLE,
-        Key: { sessionId },
+        IndexName: 'SessionIdIndex',
+        KeyConditionExpression: 'sessionId = :sid',
+        ExpressionAttributeValues: { ':sid': sessionId },
+        Limit: 1
     });
-
-    const response = await docClient.send(command);
-    return response.Item;
+    const res = await docClient.send(command);
+    return (res.Items && res.Items.length > 0) ? res.Items[0] : null;
 }
 
 /**
- * Sweeps the UserActiveIndex GSI to find any currently active session for a user.
+ * Finds the currently active session for a user in V2.
  */
 async function getActiveSessionForUser(userId) {
     const command = new QueryCommand({
         TableName: SESSIONS_TABLE,
-        IndexName: 'UserActiveIndex',
-        KeyConditionExpression: 'userId = :uid AND activeMarker = :am',
-        ExpressionAttributeValues: {
-            ':uid': userId,
-            ':am': 'ACTIVE'
-        },
+        IndexName: 'SessionStatusIndex',
+        KeyConditionExpression: 'userId = :uid AND begins_with(statusKey, :prefix)',
+        ExpressionAttributeValues: { ':uid': userId, ':prefix': 'active#' },
         Limit: 1
     });
-
-    const response = await docClient.send(command);
-    return response.Items?.[0] || null;
+    const res = await docClient.send(command);
+    return (res.Items && res.Items.length > 0) ? res.Items[0] : null;
 }
 
 /**
- * Updates the current state of the interview session, enforcing optimistic locking.
+ * Updates the session state in V2, enforcing optimistic locking.
  */
-async function updateSessionState(sessionId, newState, expectedCurrentState = null, updates = {}) {
+async function updateSessionState(userId, sessionKey, newState, expectedCurrentState = null, updates = {}) {
     let updateExpression = "SET currentState = :newState, version = if_not_exists(version, :zero) + :one";
     const expressionAttributeValues = {
         ":newState": newState,
@@ -137,131 +102,65 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
     }
 
     if (updates.expectedVersion !== undefined) {
-        if (conditionExpression) {
-            conditionExpression += " AND version = :expectedVersion";
-        } else {
-            conditionExpression = "version = :expectedVersion";
-        }
+        conditionExpression = conditionExpression ? `${conditionExpression} AND version = :expectedVersion` : "version = :expectedVersion";
         expressionAttributeValues[":expectedVersion"] = updates.expectedVersion;
-    }
-
-    if (updates.turnCount !== undefined) {
-        updateExpression += ", turnCount = :turnCount";
-        expressionAttributeValues[":turnCount"] = updates.turnCount;
-    }
-
-    if (updates.expectedTurnCount !== undefined) {
-        if (conditionExpression) {
-            conditionExpression += " AND turnCount = :expectedTurnCount";
-        } else {
-            conditionExpression = "turnCount = :expectedTurnCount";
-        }
-        expressionAttributeValues[":expectedTurnCount"] = updates.expectedTurnCount;
     }
 
     const now = new Date().toISOString();
     updateExpression += ", updatedAt = :updatedAt";
     expressionAttributeValues[":updatedAt"] = now;
     
-    if (updates.silenceRetries !== undefined) {
-        updateExpression += ", silenceRetries = :silenceRetries";
-        expressionAttributeValues[":silenceRetries"] = updates.silenceRetries;
-    }
+    const fields = [
+        'silenceRetries', 'accumulatedScores', 'questionText', 
+        'currentConceptId', 'scrapedSummary', 'contextWindow', 
+        'conceptStates', 'feedbackStatus', 'feedbackStatusKey'
+    ];
 
-    if (updates.accumulatedScores !== undefined) {
-        updateExpression += ", accumulatedScores = :accumulatedScores";
-        expressionAttributeValues[":accumulatedScores"] = updates.accumulatedScores;
-    }
-
-    if (updates.questionText !== undefined) {
-        updateExpression += ", questionText = :questionText";
-        expressionAttributeValues[":questionText"] = updates.questionText;
-    }
-
-    if (updates.currentConceptId !== undefined) {
-        updateExpression += ", currentConceptId = :currentConceptId";
-        expressionAttributeValues[":currentConceptId"] = updates.currentConceptId;
-    }
-
-    if (updates.scrapedSummary !== undefined) {
-        updateExpression += ", scrapedSummary = :scrapedSummary";
-        expressionAttributeValues[":scrapedSummary"] = updates.scrapedSummary;
-    }
+    fields.forEach(field => {
+        if (updates[field] !== undefined) {
+            updateExpression += `, ${field} = :${field}`;
+            expressionAttributeValues[`:${field}`] = updates[field];
+        }
+    });
     
-    // Cleanup active marker if terminated
     let removeExpression = "";
     if (newState === INTERVIEW_STATES.TERMINATED || newState === INTERVIEW_STATES.ERROR || newState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
-        removeExpression = " REMOVE activeMarker";
+        removeExpression = " REMOVE statusKey";
         if (updates.terminationReason) {
             updateExpression += ", terminationReason = :terminationReason";
             expressionAttributeValues[":terminationReason"] = updates.terminationReason;
         }
+    } else {
+        updateExpression += ", statusKey = :statusKey";
+        expressionAttributeValues[":statusKey"] = `active#${now}`;
     }
 
-    const command = new UpdateCommand({
+    const res = await docClient.send(new UpdateCommand({
         TableName: SESSIONS_TABLE,
-        Key: { sessionId },
+        Key: { PK: getUserPk(userId), SK: sessionKey },
         UpdateExpression: updateExpression + removeExpression,
         ExpressionAttributeValues: expressionAttributeValues,
         ConditionExpression: conditionExpression,
         ReturnValues: "ALL_NEW"
+    }));
+
+    return res.Attributes;
+}
+
+/**
+ * Lists all sessions for a user from V2, newest first.
+ */
+async function getSessionsByUserId(userId, limit = 20) {
+    const command = new QueryCommand({
+        TableName: SESSIONS_TABLE,
+        IndexName: 'UserSessionTimeIndex',
+        KeyConditionExpression: 'userId = :uid',
+        ExpressionAttributeValues: { ':uid': userId },
+        ScanIndexForward: false,
+        Limit: limit
     });
-
-    // We do oldWrite inline so we can extract Attributes for newWrite
-    let oldWriteResponse;
-    const oldWrite = async () => {
-        oldWriteResponse = await docClient.send(command);
-    };
-
-    const newWrite = async () => {
-        if (!SESSIONS_TABLE_V2 || !oldWriteResponse?.Attributes) return;
-        
-        const attrs = oldWriteResponse.Attributes;
-        
-        // Convert UpdateExpression to V2 syntax. We can use same expressions 
-        // with additional sparse index logic, or just write the returned attrs since it's a dual-write map.
-        // It's safer and fully atomic to just write the new full item using PutCommand or UpdateCommand.
-        // Wait, V2 has same fields, plus sessionKey, startedAt, statusKey, etc.
-        // Since we have the FULL updated item from oldWrite, we can just PutCommand to V2 table.
-        // BUT Wait! PutCommand overwrites the whole item. What if there are concurrent updates?
-        // Since V2 is secondary right now, PutCommand with version condition is safer, or just UpdateCommand.
-        // Actually, just mapping the UpdateCommand over to V2 is better.
-        
-        let v2UpdateExp = updateExpression + removeExpression;
-        let v2ExpVals = { ...expressionAttributeValues };
-        let v2Removes = [];
-        
-        if (newState === INTERVIEW_STATES.TERMINATED || newState === INTERVIEW_STATES.ERROR || newState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
-            v2Removes.push("statusKey");
-            // Populate feedbackStatusKey if generating feedback
-            if (newState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
-                v2UpdateExp += ", feedbackStatusKey = :fbsk";
-                v2ExpVals[":fbsk"] = `pending#${now}`;
-            }
-        } else {
-            v2UpdateExp += ", statusKey = :statusKey";
-            v2ExpVals[":statusKey"] = `active#${now}`;
-        }
-        
-        if (v2Removes.length > 0) {
-            if (v2UpdateExp.includes("REMOVE")) {
-                v2UpdateExp += ", " + v2Removes.join(", ");
-            } else {
-                v2UpdateExp += " REMOVE " + v2Removes.join(", ");
-            }
-        }
-
-        await docClient.send(new UpdateCommand({
-            TableName: SESSIONS_TABLE_V2,
-            Key: { userId: attrs.userId, sessionKey: `SESSION#${sessionId}` },
-            UpdateExpression: v2UpdateExp,
-            ExpressionAttributeValues: v2ExpVals,
-            ConditionExpression: conditionExpression // carry over optimistic locking
-        }));
-    };
-
-    await dualWrite(oldWrite, newWrite, 'SessionsTableV2', { sessionId });
-    return oldWriteResponse.Attributes;
+    const res = await docClient.send(command);
+    return res.Items || [];
 }
 
 module.exports = {
@@ -269,5 +168,6 @@ module.exports = {
     createSession,
     getSession,
     updateSessionState,
-    getActiveSessionForUser
+    getActiveSessionForUser,
+    getSessionsByUserId
 };
