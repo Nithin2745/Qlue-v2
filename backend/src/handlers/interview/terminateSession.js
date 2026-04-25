@@ -39,10 +39,14 @@ exports.handler = async (event) => {
         return {
             statusCode: 200,
             body: JSON.stringify({
-                sessionId,
-                state: INTERVIEW_STATES.TERMINATED,
-                closingStatement,
-                message: `Session terminated due to ${reason}`
+                success: true,
+                data: {
+                    sessionId,
+                    nextAIResponse: closingStatement,
+                    onlyQuestion: closingStatement,
+                    state: INTERVIEW_STATES.AI_SPEAKING,
+                    message: `Session terminated due to ${reason}`
+                }
             })
         };
 

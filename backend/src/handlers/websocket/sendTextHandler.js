@@ -174,7 +174,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             await processSentence(introText);
         }
 
-        await invokeModelStream(undefined, { messages: prompt }, async (token) => {
+        await invokeModelStream(undefined, prompt, async (token) => {
             fullText += token;
             sentenceBuffer += token;
 
@@ -362,7 +362,14 @@ async function handleTextTranscript(connectionId, body) {
   const nextAIResponse = data.nextAIResponse;
   const onlyQuestion = data.onlyQuestion || nextAIResponse;
 
-  if (!nextAIResponse) {
+  // 4. Handle pre-generated responses (silence retry, deadlock recovery)
+  if (data.silenceRetries || data.message?.includes('Deadlock') || data.message?.includes('Silence')) {
+    await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, nextAIResponse);
+    return { statusCode: 200 };
+  }
+
+  // Only require nextAIResponse for WEBSITE/INTRO modes where processUserInput generates it
+  if (session.moduleType !== 'RESUME' && session.moduleType !== 'HR' && !nextAIResponse) {
     throw new Error('No AI response generated');
   }
 
@@ -400,8 +407,52 @@ async function handleTextTranscript(connectionId, body) {
   await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
 
   return { statusCode: 200 };
+}
 
-  return { statusCode: 200 };
+/**
+ * Helper to stream pre-generated text (silence retries, etc) via TTS without Bedrock
+ */
+async function streamPreGeneratedResponse(connectionId, sessionId, session, text) {
+    const pollyVoice = VOICE_MAP[session.voiceId || 'Tiffany'] || 'Tiffany';
+    const engine = session.itemData?.engine || 'generative';
+    
+    // Stream text
+    await postToConnection(connectionId, {
+      type: 'session_text_stream',
+      payload: { text }
+    });
+    
+    // Synthesize TTS
+    let chunkIndex = 0;
+    for await (const audioChunk of synthesizeToBase64Chunks(text, { VoiceId: pollyVoice, Engine: engine })) {
+      await postToConnection(connectionId, {
+        type: 'tts_audio_chunk',
+        payload: { chunkIndex: chunkIndex++, audioData: audioChunk.audioData, isLast: false }
+      });
+    }
+    
+    // Final signals
+    await postToConnection(connectionId, {
+      type: 'tts_audio_chunk',
+      payload: { audioData: '', isLast: true }
+    });
+    
+    await postToConnection(connectionId, {
+      type: 'ai_speaking_complete',
+      payload: { sessionId, turnIndex: session.turnCount }
+    });
+    
+    await postToConnection(connectionId, {
+      type: 'session_state_update',
+      payload: {
+        sessionId,
+        previousState: 'AI_SPEAKING',
+        state: 'AI_SPEAKING',
+        turnIndex: session.turnCount,
+        questionText: text,
+        timestamp: Date.now()
+      }
+    });
 }
 
 

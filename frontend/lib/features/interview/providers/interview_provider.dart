@@ -142,7 +142,8 @@ class InterviewProvider extends ChangeNotifier {
   Future<void> _connectWebSocket(String url, String token) async {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
-    _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
+    // REMOVED: Unreliable local playback listener
+    // _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
     _isLastAudioChunkReceived = false;
     startInterview();
   }
@@ -182,6 +183,7 @@ class InterviewProvider extends ChangeNotifier {
           subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
           isStreamingText = false;
           notifyListeners();
+          _startListening(); // ✅ Start listening on backend signal
         }
         break;
 
@@ -238,6 +240,7 @@ class InterviewProvider extends ChangeNotifier {
     switch (state) {
       case 'AI_SPEAKING':
         currentPhase = InterviewPhase.speaking;
+        _stopListening(); // ✅ Force mic off immediately
         break;
       case 'USER_RESPONDING':
         currentPhase = InterviewPhase.listening;
@@ -270,6 +273,12 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void sendTextTranscript(String text) {
+    // ✅ Block if AI is speaking or session ended
+    if (currentPhase == InterviewPhase.speaking || isSessionEnded) {
+      debugPrint('Blocked transcript send: AI is speaking or session ended');
+      return;
+    }
+    
     transcript.add(TranscriptEntry(
       role: 'user',
       text: text,

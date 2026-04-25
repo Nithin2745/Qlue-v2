@@ -149,26 +149,29 @@ Return ONLY the question text, no JSON or extra formatting. Your response will b
     systemContent = `You are an interviewer. Ask one concise question. Do not evaluate the answer. Wait for the user to respond.`;
   }
 
-  return [
-    { role: 'system', content: systemContent },
-    ...history
-  ];
+  return {
+    system: systemContent,
+    messages: [
+      ...history,
+      { role: 'user', content: turnCount === 0 ? "Let's begin the interview." : "Please ask the next question." }
+    ]
+  };
 }
 
 /**
  * Builds the system prompt for Tutor Mode (WEBSITE)
  */
 function buildTutorPrompt(websiteUrl, history, userAnswer) {
-  return [
-    { 
-      role: 'system', 
-      content: `You are a tutor. The user is learning about content from this website: ${websiteUrl}.
+  return {
+    system: `You are a tutor. The user is learning about content from this website: ${websiteUrl}.
 Check the user's answer for correctness. If it's incorrect or incomplete, explain their mistakes gently and provide the right approach. Then, ask the next question.
 If they are correct, confirm it and proceed to the next concept.
-Return ONLY your response text (the verification/guidance and the next question), no JSON or extra formatting. Your response will be spoken directly to the user.` 
-    },
-    ...history
-  ];
+Return ONLY your response text (the verification/guidance and the next question), no JSON or extra formatting. Your response will be spoken directly to the user.`,
+    messages: [
+      ...history,
+      { role: 'user', content: userAnswer ? `My answer: ${userAnswer}` : "Let's begin." }
+    ]
+  };
 }
 
 /**
