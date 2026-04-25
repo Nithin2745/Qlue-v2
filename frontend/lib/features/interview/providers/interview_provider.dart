@@ -50,6 +50,8 @@ class InterviewProvider extends ChangeNotifier {
   final TtsService _ttsService = TtsService();
   final WebSocketClient _wsClient = WebSocketClient();
   bool _isLastAudioChunkReceived = false;
+  bool _isStartingListening = false;
+  bool _isCleanedUp = false;
 
 
   Future<void> initSession(String type, {String? resumeId, String? websiteUrl}) async {
@@ -102,7 +104,7 @@ class InterviewProvider extends ChangeNotifier {
   Future<void> _connectWebSocket(String url, String token) async {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
-    _ttsService.onPlaybackComplete = () => onAudioPlaybackComplete();
+    _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
     _isLastAudioChunkReceived = false;
     startInterview();
   }
@@ -218,12 +220,13 @@ class InterviewProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void onAudioPlaybackComplete() {
+  Future<void> onAudioPlaybackComplete() async {
     if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
       currentPhase = InterviewPhase.listening;
       isStreamingText = false;
+      subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
       notifyListeners();
-      _startListening();
+      await _startListening();
     }
   }
 
@@ -260,35 +263,43 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _startListening() async {
-    isListening = true;
-    _resetSilenceTimer();
+    if (_isStartingListening) return;
+    _isStartingListening = true;
     
-    // FIX: Ensure STT is ready
-    final ready = await _sttService.init();
-    if (!ready) {
-      errorMessage = "Microphone not available";
-      isListening = false;
-      notifyListeners();
-      return;
-    }
-    
-    _sttService.startListening(
-      onPartial: (text) {
-        if (currentPhase != InterviewPhase.listening) return;
-        partialTranscript = text;
-        _resetSilenceTimer();
-        notifyListeners();
-      },
-      onFinal: (text) {
-        if (currentPhase != InterviewPhase.listening) return;
-        partialTranscript = "";
+    try {
+      errorMessage = null; // Clear previous errors
+      isListening = true;
+      _resetSilenceTimer();
+      
+      // FIX: Ensure STT is ready
+      final ready = await _sttService.init();
+      if (!ready) {
+        errorMessage = "Microphone not available";
         isListening = false;
-        _stopSilenceTimer();
-        sendTextTranscript(text);
         notifyListeners();
-      },
-    );
-    notifyListeners();
+        return;
+      }
+      
+      _sttService.startListening(
+        onPartial: (text) {
+          if (currentPhase != InterviewPhase.listening) return;
+          partialTranscript = text;
+          _resetSilenceTimer();
+          notifyListeners();
+        },
+        onFinal: (text) {
+          if (currentPhase != InterviewPhase.listening) return;
+          partialTranscript = "";
+          isListening = false;
+          _stopSilenceTimer();
+          sendTextTranscript(text);
+          notifyListeners();
+        },
+      );
+      notifyListeners();
+    } finally {
+      _isStartingListening = false;
+    }
   }
 
   void _stopListening() {
@@ -324,6 +335,8 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _cleanup() {
+    if (_isCleanedUp) return;
+    _isCleanedUp = true;
     _stopListening();
     _stopSilenceTimer();
     _wsClient.disconnect();

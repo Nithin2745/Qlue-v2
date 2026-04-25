@@ -112,5 +112,12 @@ class AiDotMatrixPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant AiDotMatrixPainter oldDelegate) => true;
+  bool shouldRepaint(covariant AiDotMatrixPainter oldDelegate) {
+    return oldDelegate.time != time ||
+           oldDelegate.intensity != intensity ||
+           oldDelegate.baseColor != baseColor ||
+           oldDelegate.isInwards != isInwards ||
+           oldDelegate.tapOffset != tapOffset ||
+           oldDelegate.tapTime != tapTime;
+  }
 }

@@ -24,7 +24,12 @@ class WebSocketClient {
   String? _lastUrl;
 
   Future<void> connect(String url, String token) async {
-    final fullUrl = url.contains('token=') ? url : '$url?token=$token';
+    final uri = Uri.parse(url);
+    final queryParams = Map<String, String>.from(uri.queryParameters);
+    if (token.isNotEmpty && !queryParams.containsKey('token')) {
+      queryParams['token'] = token;
+    }
+    final fullUrl = uri.replace(queryParameters: queryParams).toString();
     _lastUrl = fullUrl;
     _status = WebSocketStatus.connecting;
     

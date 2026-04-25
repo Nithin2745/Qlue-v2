@@ -226,7 +226,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                             ),
                             child: Text(
                               "INTERVIEW MODE",
-                              style: TextStyle(color: t.primary, fontSize: 10, fontWeight: FontWeight.bold),
+                              style: TextStyle(color: t.primary, fontSize: 11, fontWeight: FontWeight.bold),
                             ),
                           ),
                         const Spacer(),
@@ -315,6 +315,8 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                                   letterSpacing: -0.8,
                                 ),
                                 textAlign: TextAlign.center,
+                                maxLines: 10,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             if (isAiSpeaking && provider.isStreamingText) ...[
@@ -412,6 +414,8 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                                       height: 1.3,
                                     ),
                                     textAlign: TextAlign.center,
+                                    maxLines: 10,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ],
                               ),

@@ -164,10 +164,10 @@ class AppThemeColors {
     textSecondary: Color(0xFF525252),
     textTertiary: Color(0xFFA1A1AA),
     textInverse: Color(0xFFFFFFFF),
-    primary: Color(0xFF305148),
-    primaryLight: Color(0x1F305148),
-    primaryMuted: Color(0x19305148),
-    primaryDark: Color(0xFF294A41),
+    primary: Color(0xFF059669),        // Bright emerald (was 0xFF305148)
+    primaryLight: Color(0x1F059669),   // Update alpha tint
+    primaryMuted: Color(0x19059669),   // Update alpha tint
+    primaryDark: Color(0xFF047857),    // Darker variant
     secondary: Color(0xFF34C759),
     secondaryMuted: Color(0x1934C759),
     success: Color(0xFF34C759),
@@ -190,7 +190,7 @@ class AppThemeColors {
     iconDefault: Color(0xFF000000),
     shadow: Color(0x1A000000),
     metallicBorder: Color(0xFFD1D5DB),
-    accentGreen: Color(0xFF10B981),
+    accentGreen: Color(0xFF34D399),
   );
 
   static const AppThemeColors dark = AppThemeColors(
@@ -232,7 +232,7 @@ class AppThemeColors {
     iconDefault: Color(0xFFFFFFFF),
     shadow: Color(0x66000000),
     metallicBorder: Color(0xFF4B5563),
-    accentGreen: Color(0xFF10B981),
+    accentGreen: Color(0xFF34D399),
   );
 
   /// Get theme colors from the nearest ancestor context.

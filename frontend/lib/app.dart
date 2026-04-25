@@ -28,6 +28,8 @@ CustomTransitionPage _buildSlideTransitionPage({
     transitionsBuilder: (context, animation, secondaryAnimation, child) {
       // Determine direction based on the current active index and this page's index
       // But for secondary animation (exiting), we need to know the NEXT index
+      // TODO: Refactor to use provider-based tab state instead of static variables
+      // Current implementation uses statics for slide direction calculation
       final targetIsHigher = TabsScreen.currentIndex > targetIndex;
 
       // 1. INCOMING SLIDE (from animation)

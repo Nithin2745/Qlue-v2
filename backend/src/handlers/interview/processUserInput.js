@@ -3,6 +3,7 @@ const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../../mode
 const { transitionState, INTERVIEW_STATES } = require('./controlTurnFlow');
 const { invokeModel, buildScoringPrompt, buildWebsiteTeachPrompt, buildSelfIntroEvalPrompt } = require('../../lib/bedrock');
 const { CONCEPT_STATES, updateConceptState } = require('../../models/conceptState');
+const { success, internalError } = require('../../lib/response');
 const generateQuestion = require('./generateQuestion');
 const terminateSession = require('./terminateSession');
 

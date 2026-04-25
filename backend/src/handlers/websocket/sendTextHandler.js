@@ -96,12 +96,19 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
     let lastProcessPromise = Promise.resolve();
 
     const processSentence = async (sentence) => {
-        let cleanSentence = sentence
-            .replace(/^\s*\{\s*"question"\s*:\s*"/, '')
-            .replace(/^\s*\{\s*"response"\s*:\s*"/, '')
-            .replace(/"\s*\}\s*$/, '')
-            .replace(/\\"/g, '"')
-            .trim();
+        let cleanSentence = sentence;
+        try {
+            const parsed = JSON.parse(sentence);
+            if (parsed.question) cleanSentence = parsed.question;
+            else if (parsed.response) cleanSentence = parsed.response;
+        } catch (e) {
+            // Fallback to regex for non-JSON responses
+            cleanSentence = sentence
+                .replace(/^\s*\{\s*"(question|response)"\s*:\s*"/, '')
+                .replace(/"\s*\}\s*$/, '')
+                .replace(/\\"/g, '"')
+                .trim();
+        }
 
         if (!cleanSentence) return;
 
@@ -153,7 +160,8 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             const intros = {
                 'RESUME': `Hello! I'm ${voiceName}. I've analyzed your resume, and I'm ready to start your technical interview. Let's begin.`,
                 'WEBSITE': `Hi there! I'm ${voiceName}, your mentor. I've reviewed the website content you provided, and I'm excited to help you learn. Here's my first question.`,
-                'HR': `Hello! I'm ${voiceName} from the recruiting team. I'll be conducting your behavioral interview today. Let's get started.`
+                'HR': `Hello! I'm ${voiceName} from the recruiting team. I'll be conducting your behavioral interview today. Let's get started.`,
+                'INTRO': `Hello! I'm ${voiceName}, your AI interviewer. Let's work on perfecting your self-introduction and elevator pitch. Ready when you are!`, // ADD
             };
             
             const introText = intros[moduleType] || `Hello! I'm ${voiceName}, your AI interviewer. Let's begin our session.`;
@@ -360,9 +368,11 @@ async function handleTextTranscript(connectionId, body) {
   }
 
   // 5. Push state and stream response
-  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, nextTurnCount, "...");
+  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, nextTurnCount, "AI is generating next question.");
 
-  await streamAIResponse(connectionId, sessionId, session, session.moduleType, prompt);
+  const updatedSession = await getSession(sessionId); // REFRESH
+
+  await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
 
   return { statusCode: 200 };
 }
