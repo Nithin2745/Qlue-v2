@@ -22,6 +22,7 @@ const INTERVIEW_STATES = {
  * Creates a new interview session in DynamoDB.
  */
 async function createSession(sessionId, userId, moduleType, itemData = {}) {
+    const now = new Date().toISOString();
     const session = {
         sessionId,
         userId,
@@ -30,7 +31,8 @@ async function createSession(sessionId, userId, moduleType, itemData = {}) {
         voiceId: itemData.voiceId || 'Tiffany',
         currentState: INTERVIEW_STATES.INITIALIZING,
         turnCount: 0,
-        startTime: new Date().toISOString(),
+        startTime: now,
+        updatedAt: now, // FIX: added
         silenceRetries: 0,
         accumulatedScores: {},
         activeMarker: "ACTIVE" // Used for Sparse GSI pattern

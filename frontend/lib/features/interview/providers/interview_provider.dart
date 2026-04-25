@@ -57,6 +57,7 @@ class InterviewProvider extends ChangeNotifier {
     isSessionEnded = false;
     _silenceStrikes = 0;
     errorMessage = null;
+    assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
     moduleType = type;
     _isLastAudioChunkReceived = false;
     subtitleText = "";
@@ -101,7 +102,7 @@ class InterviewProvider extends ChangeNotifier {
   Future<void> _connectWebSocket(String url, String token) async {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
-    _ttsService.onPlaybackComplete = onAudioPlaybackComplete;
+    _ttsService.onPlaybackComplete = () => onAudioPlaybackComplete();
     _isLastAudioChunkReceived = false;
     startInterview();
   }
@@ -186,6 +187,7 @@ class InterviewProvider extends ChangeNotifier {
 
       case 'error':
         errorMessage = payload['message'];
+        isStreamingText = false; // FIX: reset streaming flag
         notifyListeners();
         break;
     }
@@ -217,7 +219,12 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void onAudioPlaybackComplete() {
-    // Empty: the backend 'ai_speaking_complete' message controls turn transitions now.
+    if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
+      currentPhase = InterviewPhase.listening;
+      isStreamingText = false;
+      notifyListeners();
+      _startListening();
+    }
   }
 
   void sendTextTranscript(String text) {
@@ -252,9 +259,19 @@ class InterviewProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _startListening() {
+  void _startListening() async {
     isListening = true;
     _resetSilenceTimer();
+    
+    // FIX: Ensure STT is ready
+    final ready = await _sttService.init();
+    if (!ready) {
+      errorMessage = "Microphone not available";
+      isListening = false;
+      notifyListeners();
+      return;
+    }
+    
     _sttService.startListening(
       onPartial: (text) {
         if (currentPhase != InterviewPhase.listening) return;

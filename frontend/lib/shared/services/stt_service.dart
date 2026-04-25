@@ -35,6 +35,11 @@ class SttService {
       } else {
         debugPrint('STT: Initialization successful. Has permission: ${_speech.hasPermission}');
       }
+
+      // Check available locales
+      final locales = await _speech.locales();
+      final hasEnUs = locales.any((l) => l.localeId == 'en_US');
+      debugPrint('STT: en_US available: $hasEnUs');
     } catch (e) {
       debugPrint('STT: Initialization exception: $e');
       _isInitialized = false;
@@ -74,12 +79,13 @@ class SttService {
             onPartial(result.recognizedWords);
           }
         },
-        listenFor: const Duration(seconds: 60),
+        listenFor: const Duration(seconds: 30), // FIX: reduced from 60
         pauseFor: const Duration(seconds: 5),
         partialResults: true,
         cancelOnError: true,
         listenMode: ListenMode.confirmation,
         localeId: 'en_US',
+        onDevice: false,
       );
     } catch (e) {
       debugPrint('STT: Error starting to listen: $e');

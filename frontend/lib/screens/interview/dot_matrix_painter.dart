@@ -102,7 +102,7 @@ class AiDotMatrixPainter extends CustomPainter {
     final glowPaint = Paint()
       ..shader = RadialGradient(
         colors: [
-           baseColor.withOpacity(0.1 + intensity * 0.1),
+           baseColor.withOpacity(0.2 + intensity * 0.25), // was 0.1 + intensity * 0.1
            baseColor.withOpacity(0.0),
         ],
         stops: const [0.4, 1.0],

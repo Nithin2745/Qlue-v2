@@ -97,9 +97,9 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
 
     const processSentence = async (sentence) => {
         let cleanSentence = sentence
-            .replace(/\{"question":\s*"/g, '')
-            .replace(/\{"response":\s*"/g, '')
-            .replace(/"\}/g, '')
+            .replace(/^\s*\{\s*"question"\s*:\s*"/, '')
+            .replace(/^\s*\{\s*"response"\s*:\s*"/, '')
+            .replace(/"\s*\}\s*$/, '')
             .replace(/\\"/g, '"')
             .trim();
 
@@ -157,6 +157,11 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             };
             
             const introText = intros[moduleType] || `Hello! I'm ${voiceName}, your AI interviewer. Let's begin our session.`;
+            
+            // FIX: Add intro to the text buffer so frontend sees the complete message
+            fullText += introText + " ";
+            sentenceBuffer += introText + " ";
+
             console.debug(`[Stream] Sending instant intro to hide latency.`);
             await processSentence(introText);
         }
@@ -175,7 +180,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
                 const sentenceToProcess = sentenceBuffer;
                 sentenceBuffer = ""; 
                 console.debug(`[Stream] Boundary detected, processing fragment: "${sentenceToProcess.substring(0, 30)}..."`);
-                processSentence(sentenceToProcess);
+                await processSentence(sentenceToProcess);
             }
 
             if (!textRefreshTimer) {
@@ -289,6 +294,11 @@ async function handleSessionInit(connectionId, body) {
         prompt = buildInterviewPrompt(context, history, 0, session.moduleType);
     }
 
+    // FIX: Transition state in DB before streaming
+    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.INITIALIZING, {
+        turnCount: session.turnCount || 0
+    });
+
     // Push state update to transition UI
     await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.INITIALIZING, INTERVIEW_STATES.AI_SPEAKING, 0, "...");
 
@@ -305,6 +315,15 @@ async function handleTextTranscript(connectionId, body) {
 
   const session = await getSession(sessionId);
   if (!session) throw new Error('Session not found');
+
+  // FIX: Reject input if AI is still speaking
+  if (session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
+    await postToConnection(connectionId, {
+      type: 'error',
+      payload: { message: 'Please wait for the interviewer to finish speaking.', code: 'AI_STILL_SPEAKING' }
+    });
+    return { statusCode: 200 };
+  }
 
   // 1. Save user transcript
   await saveTranscript(sessionId, session.turnCount || 0, SPEAKERS.USER, text);

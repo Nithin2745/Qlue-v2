@@ -68,7 +68,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
       });
 
       final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
-      assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'SELF_INTRO', 'Invalid moduleType');
+      assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
 
       interviewProvider.initSession(
         type, 
@@ -265,52 +265,64 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                     alignment: Alignment.bottomCenter,
                     child: SingleChildScrollView(
                       reverse: true,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Label - changes based on state
-                          Text(
-                            isConnecting 
-                              ? "ESTABLISHING NEURAL LINK" 
-                              : (isAiSpeaking && provider.isStreamingText 
-                                ? "AI SPEAKING" 
-                                : "SYSTEM BROADCAST"), 
-                            style: TextStyle(
-                              fontSize: 9, 
-                              fontFamily: 'monospace', 
-                              fontWeight: FontWeight.w900, 
-                              color: isAiSpeaking && provider.isStreamingText
-                                ? t.primary.withValues(alpha: 0.4)
-                                : Colors.white.withValues(alpha: 0.1), 
-                              letterSpacing: 4
-                            )
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: t.primary.withValues(alpha: 0.12), // subtle forest green bg
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: t.primary.withValues(alpha: 0.3),
+                            width: 1,
                           ),
-                          const SizedBox(height: 12),
-                          // Main text - subtitle styling during AI speech
-                          AnimatedOpacity(
-                            duration: const Duration(milliseconds: 300),
-                            opacity: 1.0,
-                            child: Text(
-                              topDisplayText,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Label
+                            Text(
+                              isConnecting
+                                  ? "ESTABLISHING NEURAL LINK"
+                                  : (isAiSpeaking && provider.isStreamingText
+                                      ? "AI SPEAKING"
+                                      : "SYSTEM BROADCAST"),
                               style: TextStyle(
-                                fontSize: isAiSpeaking && provider.isStreamingText ? 16 : 18,
-                                fontFamily: 'monospace', 
-                                fontWeight: FontWeight.w700,
-                                color: isTutor ? Colors.tealAccent : (isAiSpeaking && provider.isStreamingText
-                                  ? t.primary.withValues(alpha: 0.9) // Highlighted subtitle during speech
-                                  : Colors.white), // White for final question
-                                height: 1.3,
-                                letterSpacing: -0.8,
+                                fontSize: 10,
+                                fontFamily: 'monospace',
+                                fontWeight: FontWeight.w900,
+                                color: isAiSpeaking && provider.isStreamingText
+                                    ? t.primary.withValues(alpha: 0.6)
+                                    : Colors.white.withValues(alpha: 0.2),
+                                letterSpacing: 4,
                               ),
-                              textAlign: TextAlign.center,
                             ),
-                          ),
-                          // Animated speaking indicator when AI is streaming
-                          if (isAiSpeaking && provider.isStreamingText) ...[
-                            const SizedBox(height: 8),
-                            _buildSpeakingIndicator(t),
+                            const SizedBox(height: 12),
+                            // Main text
+                            AnimatedOpacity(
+                              duration: const Duration(milliseconds: 300),
+                              opacity: 1.0,
+                              child: Text(
+                                topDisplayText,
+                                style: TextStyle(
+                                  fontSize: isAiSpeaking && provider.isStreamingText ? 16 : 18,
+                                  fontFamily: 'monospace',
+                                  fontWeight: FontWeight.w700,
+                                  color: isTutor 
+                                      ? Colors.tealAccent 
+                                      : (isAiSpeaking && provider.isStreamingText
+                                          ? t.primary.withValues(alpha: 0.95)
+                                          : Colors.white),
+                                  height: 1.3,
+                                  letterSpacing: -0.8,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                            if (isAiSpeaking && provider.isStreamingText) ...[
+                              const SizedBox(height: 8),
+                              _buildSpeakingIndicator(t),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
                     ),
                   ),

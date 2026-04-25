@@ -21,7 +21,7 @@ class TtsService {
 
   Future<void> playBase64Chunk(String base64Data, bool isLast) async {
     if (base64Data.isNotEmpty) {
-      _hasSignaledCompletion = false; // New audio batch starting
+      _hasSignaledCompletion = false;
       final bytes = base64Decode(base64Data);
       _queue.add(bytes);
     }
@@ -30,6 +30,7 @@ class TtsService {
       _startPlayback();
     }
 
+    // FIX: If this is the last chunk and nothing is playing/queued, signal completion
     if (isLast && _queue.isEmpty && !_isPlaying && !_hasSignaledCompletion) {
       _hasSignaledCompletion = true;
       onPlaybackComplete?.call();

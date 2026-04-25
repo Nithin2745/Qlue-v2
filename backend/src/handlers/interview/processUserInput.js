@@ -35,15 +35,12 @@ exports.handler = async (event) => {
             const deadlockTime = Date.now() - new Date(session.updatedAt || session.startTime).getTime();
             if (deadlockTime > 60 * 1000) {
                 // Recover the session silently
-                return {
-                    statusCode: 200,
-                    body: JSON.stringify({
-                        sessionId,
-                        nextAIResponse: "Sorry, I lost my train of thought. Let's continue where we left off.",
-                        state: INTERVIEW_STATES.AI_SPEAKING,
-                        message: 'Recovered from Deadlock.'
-                    })
-                };
+                return success({ // FIX: use success() wrapper
+                    sessionId,
+                    nextAIResponse: "Sorry, I lost my train of thought. Let's continue where we left off.",
+                    state: INTERVIEW_STATES.AI_SPEAKING,
+                    message: 'Recovered from Deadlock.'
+                });
             }
         }
 

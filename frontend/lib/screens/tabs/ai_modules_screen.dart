@@ -477,7 +477,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
           "Evaluate clarity and delivery.",
           "Intro",
           "assets/images/SelfIntro.png",
-          onStartTap: () => context.push('/interview/session/new?moduleType=SELF_INTRO'),
+          onStartTap: () => context.push('/interview/session/new?moduleType=INTRO'),
         ),
       ],
     );

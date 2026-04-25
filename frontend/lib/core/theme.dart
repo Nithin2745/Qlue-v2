@@ -206,10 +206,10 @@ class AppThemeColors {
     textSecondary: Color(0xFFA3A3A3),
     textTertiary: Color(0xFF525252),
     textInverse: Color(0xFF000000),
-    primary: Color(0xFF2F4C44),
-    primaryLight: Color(0x1F2F4C44),
-    primaryMuted: Color(0x262F4C44),
-    primaryDark: Color(0xFF294A41),
+    primary: Color(0xFF34D399),        // Bright emerald (was 0xFF2F4C44)
+    primaryLight: Color(0x1F34D399),   // Update alpha tint
+    primaryMuted: Color(0x2634D399),   // Update alpha tint
+    primaryDark: Color(0xFF10B981),    // Darker variant for contrast
     secondary: Color(0xFF30D158),
     secondaryMuted: Color(0x1F30D158),
     success: Color(0xFF30D158),
