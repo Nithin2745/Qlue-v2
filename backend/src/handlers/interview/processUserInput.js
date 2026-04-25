@@ -154,7 +154,7 @@ exports.handler = async (event) => {
 
             const prompt = buildWebsiteTeachPrompt(targetConcept, content, (await getTranscriptBySession(sessionId)).map(t => ({
                 role: t.speaker === 'USER' ? 'user' : 'assistant',
-                content: t.text
+                content: [{ text: t.text }]
             })), true);
             
             const bedrockResult = await invokeModel(undefined, { messages: prompt });

@@ -22,6 +22,7 @@ exports.handler = async (event) => {
         const turnCount = session.turnCount || 0;
 
         // 1. Fetch Conversation History (formatted for Bedrock)
+        const transcripts = await getTranscriptBySession(sessionId);
         const history = transcripts.map(t => ({
             role: t.speaker === 'USER' ? 'user' : 'assistant',
             content: [{ text: t.text }]
