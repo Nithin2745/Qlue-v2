@@ -262,70 +262,67 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                 Expanded(
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 40),
-                    alignment: Alignment.bottomCenter,
-                    child: SingleChildScrollView(
-                      reverse: true,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: t.emeraldLight.withValues(alpha: 0.6), // subtle emerald green bg
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: t.emeraldPrimary.withValues(alpha: 0.3),
-                            width: 1,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 220),
+                          child: SingleChildScrollView(
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: t.emeraldLight,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: t.emeraldPrimary.withValues(alpha: 0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    isConnecting
+                                        ? "ESTABLISHING NEURAL LINK"
+                                        : (isAiSpeaking ? "AI SPEAKING" : "SYSTEM BROADCAST"),
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.w900,
+                                      color: isAiSpeaking
+                                          ? t.emeraldPrimary.withValues(alpha: 0.6)
+                                          : Colors.white.withValues(alpha: 0.2),
+                                      letterSpacing: 4,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    topDisplayText,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.w700,
+                                      color: isTutor
+                                          ? Colors.tealAccent
+                                          : t.emeraldPrimary.withValues(alpha: 0.95),
+                                      height: 1.3,
+                                      letterSpacing: -0.8,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 10,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (isAiSpeaking) ...[
+                                    const SizedBox(height: 8),
+                                    _buildSpeakingIndicator(t),
+                                  ],
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Label
-                            Text(
-                              isConnecting
-                                  ? "ESTABLISHING NEURAL LINK"
-                                  : (isAiSpeaking && provider.isStreamingText
-                                      ? "AI SPEAKING"
-                                      : "SYSTEM BROADCAST"),
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontFamily: 'monospace',
-                                fontWeight: FontWeight.w900,
-                                color: isAiSpeaking && provider.isStreamingText
-                                    ? t.emeraldPrimary.withValues(alpha: 0.6)
-                                    : Colors.white.withValues(alpha: 0.2),
-                                letterSpacing: 4,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            // Main text
-                            AnimatedOpacity(
-                              duration: const Duration(milliseconds: 300),
-                              opacity: 1.0,
-                              child: Text(
-                                topDisplayText,
-                                style: TextStyle(
-                                  fontSize: isAiSpeaking && provider.isStreamingText ? 16 : 18,
-                                  fontFamily: 'monospace',
-                                  fontWeight: FontWeight.w700,
-                                  color: isTutor 
-                                      ? Colors.tealAccent 
-                                      : (isAiSpeaking && provider.isStreamingText
-                                          ? t.emeraldPrimary.withValues(alpha: 0.95)
-                                          : Colors.white),
-                                  height: 1.3,
-                                  letterSpacing: -0.8,
-                                ),
-                                textAlign: TextAlign.center,
-                                maxLines: 10,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (isAiSpeaking && provider.isStreamingText) ...[
-                              const SizedBox(height: 8),
-                              _buildSpeakingIndicator(t),
-                            ],
-                          ],
-                        ),
-                      ),
+                      ],
                     ),
                   ),
                 ),

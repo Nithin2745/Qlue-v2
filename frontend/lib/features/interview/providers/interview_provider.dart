@@ -65,6 +65,15 @@ class InterviewProvider extends ChangeNotifier {
     subtitleText = "";
     isStreamingText = false;
     finalTranscript = "";
+    
+    // RESET STATE
+    questionText = "...";
+    finalQuestionText = "";
+    partialTranscript = "";
+    transcript.clear();
+    currentPhase = InterviewPhase.ready;
+    currentTurnIndex = 0;
+    
     notifyListeners();
 
     try {
@@ -154,7 +163,9 @@ class InterviewProvider extends ChangeNotifier {
         final status = payload?['status'] ?? '';
         
         if (status == 'thinking') {
-          subtitleText = "Thinking...";
+          if (subtitleText.isEmpty) {
+            subtitleText = "Thinking...";
+          }
           isStreamingText = true;
           notifyListeners();
         } else if (streamText.isNotEmpty) {
