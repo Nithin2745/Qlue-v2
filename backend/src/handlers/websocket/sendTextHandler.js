@@ -239,6 +239,11 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             payload: { sessionId, turnIndex: session.turnCount }
         });
 
+        // Persist the actual generated text to DynamoDB
+        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.PROCESSING_RESPONSE, {
+            questionText: fullText,
+        });
+
         console.info(`[Stream] Sequential processing complete.`);
 
         // Final UI text sync
@@ -281,7 +286,7 @@ async function handleSessionInit(connectionId, body) {
     const transcripts = await getTranscriptBySession(sessionId);
     const history = transcripts.map(t => ({
         role: t.speaker === 'USER' ? 'user' : 'assistant',
-        content: t.text
+        content: [{ text: t.text }]
     }));
 
     // Build Prompt
@@ -362,6 +367,9 @@ async function handleTextTranscript(connectionId, body) {
   const nextAIResponse = data.nextAIResponse;
   const onlyQuestion = data.onlyQuestion || nextAIResponse;
 
+  // Refresh session from DB to get the most up-to-date state (turnCount, scores)
+  const updatedSession = await getSession(sessionId);
+
   // 4. Handle pre-generated responses (silence retry, deadlock recovery)
   if (data.silenceRetries || data.message?.includes('Deadlock') || data.message?.includes('Silence')) {
     await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, nextAIResponse);
@@ -378,7 +386,7 @@ async function handleTextTranscript(connectionId, body) {
   const transcripts = await getTranscriptBySession(sessionId);
   const history = transcripts.map(t => ({
     role: t.speaker === 'USER' ? 'user' : 'assistant',
-    content: t.text
+    content: [{ text: t.text }]
   }));
 
   let prompt = [];
@@ -400,9 +408,7 @@ async function handleTextTranscript(connectionId, body) {
 
   // 6. Push state and stream response
   // Note: processUserInput already advanced the state in DB to AI_SPEAKING or similar
-  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, session.turnCount + 1, "AI is generating next question.");
-
-  const updatedSession = await getSession(sessionId); 
+  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is generating next question.");
 
   await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
 
@@ -452,6 +458,11 @@ async function streamPreGeneratedResponse(connectionId, sessionId, session, text
         questionText: text,
         timestamp: Date.now()
       }
+    });
+
+    // Persist the pre-generated text to DynamoDB
+    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.PROCESSING_RESPONSE, {
+        questionText: text,
     });
 }
 

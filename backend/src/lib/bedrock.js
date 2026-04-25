@@ -153,7 +153,7 @@ Return ONLY the question text, no JSON or extra formatting. Your response will b
     system: systemContent,
     messages: [
       ...history,
-      { role: 'user', content: turnCount === 0 ? "Let's begin the interview." : "Please ask the next question." }
+      { role: 'user', content: [{ text: turnCount === 0 ? "Let's begin the interview." : "Please ask the next question." }] }
     ]
   };
 }
@@ -169,7 +169,7 @@ If they are correct, confirm it and proceed to the next concept.
 Return ONLY your response text (the verification/guidance and the next question), no JSON or extra formatting. Your response will be spoken directly to the user.`,
     messages: [
       ...history,
-      { role: 'user', content: userAnswer ? `My answer: ${userAnswer}` : "Let's begin." }
+      { role: 'user', content: [{ text: userAnswer ? `My answer: ${userAnswer}` : "Let's begin." }] }
     ]
   };
 }
@@ -179,15 +179,16 @@ Return ONLY your response text (the verification/guidance and the next question)
  */
 function buildScoringPrompt(moduleType, transcript, dimensions) {
   return {
-    messages: [
-      {
-        role: 'system',
-        content: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
+    system: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
 Please score the applicant across these dimensions: ${dimensions.join(', ')}.
 Transcript:
 ${JSON.stringify(transcript)}
 
-Format your output strictly as JSON mapping each dimension to a score between 1-100.`
+Format your output strictly as JSON mapping each dimension to a score between 1-100.`,
+    messages: [
+      {
+        role: 'user',
+        content: [{ text: "Please score this interview based on the provided transcript and dimensions." }]
       }
     ]
   };
@@ -198,15 +199,16 @@ Format your output strictly as JSON mapping each dimension to a score between 1-
  */
 function buildFeedbackPrompt(moduleType, transcript, scores) {
   return {
-    messages: [
-      {
-        role: 'system',
-        content: `You are an AI Interview coach providing actionable feedback.
+    system: `You are an AI Interview coach providing actionable feedback.
 Review the following ${moduleType} session.
 Scores: ${JSON.stringify(scores)}
 Transcript: ${JSON.stringify(transcript)}
 
-Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths": [], "improvements": []}`
+Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths": [], "improvements": []}`,
+    messages: [
+      {
+        role: 'user',
+        content: [{ text: "Please provide constructive feedback based on the scores and transcript." }]
       }
     ]
   };
@@ -217,13 +219,14 @@ Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths
  */
 function buildConceptExtractionPrompt(content) {
   return {
-    messages: [
-      {
-        role: 'system',
-        content: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
+    system: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
 Text: ${content.substring(0, 5000)}
 
-Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`
+Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`,
+    messages: [
+      {
+        role: 'user',
+        content: [{ text: "Extract concepts from the provided text." }]
       }
     ]
   };
@@ -241,7 +244,7 @@ Instructions:
 
   const messages = [
     ...history,
-    { role: 'user', content: turnCount === 0 ? "Let's begin the interview." : "Generate the next technical question." }
+    { role: 'user', content: [{ text: turnCount === 0 ? "Let's begin the interview." : "Generate the next technical question." }] }
   ];
   return { system: systemContent, messages };
 }
@@ -250,7 +253,7 @@ function buildHRQuestionPrompt(context, history) {
   const systemContent = `You are an HR recruiter. Ask one concise behavioral question using the STAR framework. Do not evaluate the previous answer.`;
   const messages = [
     ...history,
-    { role: 'user', content: "Generate the next behavioral question." }
+    { role: 'user', content: [{ text: "Generate the next behavioral question." }] }
   ];
   return { system: systemContent, messages };
 }
@@ -266,7 +269,7 @@ Instructions:
 
   const messages = [
     ...history,
-    { role: 'user', content: isEvaluation ? "Evaluate my response and ask the next question." : `Introduce ${targetConcept} and ask a question.` }
+    { role: 'user', content: [{ text: isEvaluation ? "Evaluate my response and ask the next question." : `Introduce ${targetConcept} and ask a question.` }] }
   ];
   return { system: systemContent, messages };
 }
@@ -275,7 +278,7 @@ function buildSelfIntroEvalPrompt(transcript) {
   return {
     system: "You are an expert communication coach. Evaluate the self-introduction provided.",
     messages: [
-      { role: 'user', content: `Introduction to evaluate: ${transcript}` }
+      { role: 'user', content: [{ text: `Introduction to evaluate: ${transcript}` }] }
     ]
   };
 }

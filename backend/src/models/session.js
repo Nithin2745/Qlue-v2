@@ -111,6 +111,11 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         updateExpression += ", accumulatedScores = :accumulatedScores";
         expressionAttributeValues[":accumulatedScores"] = updates.accumulatedScores;
     }
+
+    if (updates.questionText !== undefined) {
+        updateExpression += ", questionText = :questionText";
+        expressionAttributeValues[":questionText"] = updates.questionText;
+    }
     
     // Cleanup active marker if terminated
     let removeExpression = "";
