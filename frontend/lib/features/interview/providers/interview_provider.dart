@@ -270,11 +270,6 @@ class InterviewProvider extends ChangeNotifier {
       case 'SILENCE_DETECTED':
         currentPhase = InterviewPhase.processing;
         _stopListening();
-        _silenceStrikes++;
-        if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
-          isSessionEnded = true;
-          _cleanup();
-        }
         break;
     }
     notifyListeners();

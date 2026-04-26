@@ -44,7 +44,7 @@ exports.handler = async (event) => {
                     sessionId,
                     nextAIResponse: closingStatement,
                     onlyQuestion: closingStatement,
-                    state: INTERVIEW_STATES.AI_SPEAKING,
+                    state: INTERVIEW_STATES.TERMINATED,
                     message: `Session terminated due to ${reason}`
                 }
             })

@@ -181,7 +181,7 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             sentenceBuffer += token;
 
             // Only split on full sentence boundaries to avoid choppy speech
-            const isFullBoundary = sentenceBuffer.length >= 20 && /[.!?](\s|$)/.test(sentenceBuffer);
+            const isFullBoundary = /[.!?](\s|$)/.test(sentenceBuffer) && sentenceBuffer.trim().length >= 20;
 
             if (isFullBoundary) {
                 const sentenceToProcess = sentenceBuffer;
@@ -326,7 +326,11 @@ async function handleTextTranscript(connectionId, body) {
   const session = await getSession(sessionId);
   if (!session) throw new Error('Session not found');
 
-
+  // BUG 9: Guard against zombie/terminated sessions
+  if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
+    await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
+    return { statusCode: 200 };
+  }
 
   // 1. Save user transcript (moved to processUserInput, but keeping here for legacy if needed, 
   // actually processUserInput also saves it, so we can remove it from here to avoid double save)
@@ -445,21 +449,15 @@ async function streamPreGeneratedResponse(connectionId, sessionId, session, text
       payload: { sessionId, turnIndex: session.turnCount }
     });
     
+    // Send finalized question text (no state transition to avoid duplicates)
     await postToConnection(connectionId, {
-      type: 'session_state_update',
+      type: 'question_text_update',
       payload: {
         sessionId,
-        previousState: 'AI_SPEAKING',
-        state: 'AI_SPEAKING',
         turnIndex: session.turnCount,
         questionText: text,
         timestamp: Date.now()
       }
-    });
-
-    // Persist the pre-generated text to DynamoDB
-    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
-        questionText: text,
     });
 }
 
@@ -469,20 +467,11 @@ async function streamPreGeneratedResponse(connectionId, sessionId, session, text
  * Routes through processUserInput with isSilence flag for retry/termination logic.
  */
 async function handleSilenceDetected(connectionId, body) {
-    const { sessionId, silenceStrikes } = body.payload || {};
+    const { sessionId } = body.payload || {};
     if (!sessionId) throw new Error('Missing sessionId');
 
-    const session = await getSession(sessionId);
-    if (!session) throw new Error('Session not found');
-
-    console.info(`[Silence] Detected for session ${sessionId}, strike ${silenceStrikes}`);
-
-    // Route through processUserInput with isSilence flag
     const processRes = await processUserInput.handler({
-        body: JSON.stringify({
-            sessionId,
-            isSilence: true
-        })
+        body: JSON.stringify({ sessionId, isSilence: true })
     });
 
     if (processRes.statusCode !== 200) {
@@ -495,22 +484,20 @@ async function handleSilenceDetected(connectionId, body) {
     }
 
     const processBody = JSON.parse(processRes.body);
-    const data = processBody.data || processBody;
+    const data = processBody.data;
 
-    // Check for termination
+    // Check for termination (3rd silence strike)
     if (data.state === 'TERMINATED' || data.reason === 'SILENCE_TIMEOUT') {
         await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
         return { statusCode: 200 };
     }
 
-    // Stream the retry message via TTS
     const updatedSession = await getSession(sessionId);
-    if (data.nextAIResponse) {
-        await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is responding to silence.");
+
+    if (data.silenceRetries || data.message?.includes('Silence')) {
         await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, data.nextAIResponse);
-        
         await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING);
-        await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
+        await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn.");
     }
 
     return { statusCode: 200 };
