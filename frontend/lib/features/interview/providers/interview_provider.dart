@@ -42,7 +42,6 @@ class InterviewProvider extends ChangeNotifier {
   String? errorMessage;
   bool isSessionEnded = false;
 
-  final List<List<int>> _audioChunkQueue = [];
   int _silenceStrikes = 0;
   int get silenceStrikes => _silenceStrikes;
   Timer? _silenceTimer;
@@ -221,11 +220,6 @@ class InterviewProvider extends ChangeNotifier {
         if (newQuestion != null && newQuestion != "...") {
           questionText = newQuestion;
           finalQuestionText = newQuestion; // Store finalized question
-          transcript.add(TranscriptEntry(
-            role: 'ai',
-            text: questionText,
-            timestamp: DateTime.now(),
-          ));
         }
 
         final state = payload?['state'];
@@ -241,7 +235,8 @@ class InterviewProvider extends ChangeNotifier {
 
       case 'error':
         errorMessage = payload['message'];
-        isStreamingText = false; // FIX: reset streaming flag
+        isStreamingText = false;
+        currentPhase = InterviewPhase.ready; // FIX: reset phase on error
         notifyListeners();
         break;
     }
@@ -306,11 +301,6 @@ class InterviewProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<List<int>> consumeAllAudioChunks() {
-    final chunks = List<List<int>>.from(_audioChunkQueue);
-    _audioChunkQueue.clear();
-    return chunks;
-  }
 
   Future<void> endSession() async {
     _wsClient.send('terminate_session', {

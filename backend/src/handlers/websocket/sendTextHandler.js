@@ -8,32 +8,21 @@ const generateQuestion = require('../interview/generateQuestion');
 const processUserInput = require('../interview/processUserInput');
 const terminateSession = require('../interview/terminateSession');
 const { synthesizeToBase64Chunks } = require('../../lib/polly');
-const { invokeModelStream, buildInterviewPrompt, buildTutorPrompt } = require('../../lib/bedrock');
+const { invokeModelStream, buildInterviewPrompt, buildTutorPrompt, buildWebsiteTeachPrompt } = require('../../lib/bedrock');
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
 const { transitionState } = require('../interview/controlTurnFlow');
 const { associateSession } = require('../../models/wsConnection');
+const { fetchAndCleanContent } = require('../../lib/scraper');
+const { getConceptsBySession } = require('../../models/conceptState');
 
 
-// Voice Mapping - Maps UI voice names to Polly VoiceIds
-// Generative engine supports: Tiffany, Gregory, Patrick, Kevin, Matthew, Justin, Joey, Stephen, Ivy
-// and female voices: Danielle, Joanna, Ruth, Salli, Kimberly, Kendra
-const VOICE_MAP = {
-    'Tiffany': 'Tiffany',
-    'Matthew': 'Matthew',
-    'Gregory': 'Gregory',
-    'Ivy': 'Ivy',
-    'Joanna': 'Joanna',
-    'Kendra': 'Kendra',
-    'Kimberly': 'Kimberly',
-    'Salli': 'Salli',
-    'Joey': 'Joey',
-    'Justin': 'Justin',
-    'Kevin': 'Kevin',
-    'Patrick': 'Patrick',
-    'Stephen': 'Stephen',
-    'Ruth': 'Ruth'
-};
+// Supported engine voices
+const SUPPORTED_VOICES = [
+    'Tiffany', 'Matthew', 'Gregory', 'Ivy', 'Joanna', 'Kendra', 
+    'Kimberly', 'Salli', 'Joey', 'Justin', 'Kevin', 'Patrick', 
+    'Stephen', 'Ruth'
+];
 
 /**
  * AWS Lambda Handler for WebSocket $default route.
@@ -85,7 +74,7 @@ exports.handler = async (event) => {
  * 4. Pushes results to WebSocket connection
  */
 async function streamAIResponse(connectionId, sessionId, session, moduleType, prompt) {
-    const pollyVoice = VOICE_MAP[session.voiceId || 'Tiffany'] || 'Tiffany';
+    const pollyVoice = SUPPORTED_VOICES.includes(session.voiceId) ? session.voiceId : 'Tiffany';
     let fullText = "";
     let sentenceBuffer = "";
     let globalAudioChunkIndex = 0;
@@ -252,10 +241,22 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
         // Final UI text sync
         await sendPartialText(fullText);
 
+        // Bug 11: Save AI question to transcript for conversation history
+        await saveTranscript(sessionId, session.turnCount, SPEAKERS.AI, fullText);
+
         return fullText;
     } catch (error) {
         console.error('Streaming Response Failed:', error);
         
+        // Bug 7: Transition to ERROR state so session isn't stuck in AI_SPEAKING
+        try {
+            await updateSessionState(sessionId, INTERVIEW_STATES.ERROR, null, {
+                terminationReason: 'STREAMING_ERROR: ' + error.message
+            });
+        } catch (stateError) {
+            console.error('Failed to transition to ERROR state:', stateError);
+        }
+
         // Notify the client of the failure so they don't stay in a hanging state
         await postToConnection(connectionId, {
             type: 'error',
@@ -298,7 +299,18 @@ async function handleSessionInit(connectionId, body) {
     // Build Prompt
     let prompt = [];
     if (session.moduleType === 'WEBSITE') {
-        prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, "");
+        // Bug 4: Scrape actual content and use buildWebsiteTeachPrompt
+        const websiteUrl = session.itemData?.websiteUrl;
+        let content = 'No content available.';
+        try {
+            const scraped = await fetchAndCleanContent(websiteUrl);
+            content = scraped.content;
+        } catch (e) {
+            console.warn('[SessionInit] Failed to scrape website content:', e.message);
+        }
+        const concepts = await getConceptsBySession(sessionId);
+        const targetConcept = concepts.length > 0 ? concepts[0].conceptId : 'General Overview';
+        prompt = buildWebsiteTeachPrompt(targetConcept, content, history, false);
     } else {
         let context = "Professional Background";
         if (session.moduleType === 'RESUME') {
@@ -349,7 +361,8 @@ async function handleTextTranscript(connectionId, body) {
   const processRes = await processUserInput.handler({ 
     body: JSON.stringify({ 
       sessionId, 
-      textTranscript: text 
+      textTranscript: text,
+      currentConceptId: body.payload?.currentConceptId // Bug 9: Pass through for WEBSITE mode
     }) 
   });
 
@@ -398,7 +411,18 @@ async function handleTextTranscript(connectionId, body) {
 
   let prompt = [];
   if (session.moduleType === 'WEBSITE') {
-    prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, text);
+    // Bug 4: Scrape actual content and use buildWebsiteTeachPrompt
+    const websiteUrl = session.itemData?.websiteUrl;
+    let content = 'No content available.';
+    try {
+        const scraped = await fetchAndCleanContent(websiteUrl);
+        content = scraped.content;
+    } catch (e) {
+        console.warn('[TextTranscript] Failed to scrape website content:', e.message);
+    }
+    const concepts = await getConceptsBySession(sessionId);
+    const targetConcept = (concepts.length > 0 ? concepts[0].conceptId : 'General Overview');
+    prompt = buildWebsiteTeachPrompt(targetConcept, content, history, true);
   } else {
     let context = "Professional Background";
     if (session.moduleType === 'RESUME') {
@@ -428,7 +452,7 @@ async function handleTextTranscript(connectionId, body) {
  * Helper to stream pre-generated text (silence retries, etc) via TTS without Bedrock
  */
 async function streamPreGeneratedResponse(connectionId, sessionId, session, text) {
-    const pollyVoice = VOICE_MAP[session.voiceId || 'Tiffany'] || 'Tiffany';
+    const pollyVoice = SUPPORTED_VOICES.includes(session.voiceId) ? session.voiceId : 'Tiffany';
     const engine = session.itemData?.engine || 'generative';
     
     // Stream text
@@ -538,25 +562,62 @@ async function handleSessionReconnect(connectionId, body) {
     if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
         await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
     } else {
-        // Send question text separately via question_text_update to avoid
-        // duplicating the transcript entry (session_state_update adds to transcript)
-        if (session.questionText) {
+        // Bug 8: If reconnecting during AI_SPEAKING, the frontend is stuck because
+        // no TTS audio will play and onPlaybackComplete will never fire.
+        // Send an empty isLast chunk to unblock the TTS service.
+        if (session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
+            // Send whatever question text we have
+            if (session.questionText) {
+                await postToConnection(connectionId, {
+                    type: 'question_text_update',
+                    payload: {
+                        sessionId,
+                        turnIndex: session.turnCount,
+                        questionText: session.questionText
+                    }
+                });
+            }
+            // Send isLast to unblock TTS → fires onPlaybackComplete → enables mic
             await postToConnection(connectionId, {
-                type: 'question_text_update',
-                payload: {
-                    sessionId,
-                    turnIndex: session.turnCount,
-                    questionText: session.questionText
-                }
+                type: 'tts_audio_chunk',
+                payload: { audioData: '', isLast: true }
             });
+            await postToConnection(connectionId, {
+                type: 'ai_speaking_complete',
+                payload: { sessionId, turnIndex: session.turnCount }
+            });
+            // Transition to USER_RESPONDING
+            try {
+                await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
+            } catch (e) {
+                console.warn('[Reconnect] State transition failed:', e.message);
+            }
+            await pushStateUpdate(
+                connectionId, sessionId,
+                INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING,
+                session.turnCount,
+                null
+            );
+        } else {
+            // Normal reconnect — send question text separately to avoid transcript duplication
+            if (session.questionText) {
+                await postToConnection(connectionId, {
+                    type: 'question_text_update',
+                    payload: {
+                        sessionId,
+                        turnIndex: session.turnCount,
+                        questionText: session.questionText
+                    }
+                });
+            }
+            // Push state WITHOUT questionText to avoid transcript duplication
+            await pushStateUpdate(
+                connectionId, sessionId,
+                session.currentState, session.currentState,
+                session.turnCount,
+                null
+            );
         }
-        // Push state WITHOUT questionText to avoid transcript duplication
-        await pushStateUpdate(
-            connectionId, sessionId,
-            session.currentState, session.currentState,
-            session.turnCount,
-            null
-        );
     }
 
     return { statusCode: 200 };

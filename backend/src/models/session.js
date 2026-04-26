@@ -116,6 +116,11 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         updateExpression += ", questionText = :questionText";
         expressionAttributeValues[":questionText"] = updates.questionText;
     }
+
+    if (updates.currentConceptId !== undefined) {
+        updateExpression += ", currentConceptId = :currentConceptId";
+        expressionAttributeValues[":currentConceptId"] = updates.currentConceptId;
+    }
     
     // Cleanup active marker if terminated
     let removeExpression = "";

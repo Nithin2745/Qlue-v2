@@ -43,7 +43,7 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, params, options = {}) {
       
       // Standardize response format
       const responseBody = {
-        content: [{ text: response.output.message.content[0].text }],
+        content: [{ text: response.output?.message?.content?.[0]?.text ?? '' }],
         usage: response.usage
       };
 
@@ -169,7 +169,7 @@ Progress through: teamwork, problem-solving, leadership, conflict, adaptability.
 Use STAR framework questions with specific scenarios.
 After 5-6 questions, conclude with 'Thank you. This concludes our interview.'`;
 
-  } else if (moduleType === 'SELF_INTRO') {
+  } else if (moduleType === 'INTRO') {
     systemContent = `You are Qlue, a communication coach. NEVER use markdown or bullet points.
 Write ONLY spoken text, max 40 words per response.
 Do NOT evaluate or give feedback during the exercise.

@@ -12,7 +12,8 @@ const terminateSession = require('./terminateSession');
 const DIMENSIONS = {
     RESUME: ['technical accuracy', 'communication clarity', 'fluency', 'depth of knowledge', 'use of examples'],
     WEBSITE: ['concept understanding', 'learning agility', 'application ability', 'fluency', 'comprehension accuracy'],
-    HR: ['STAR format adherence', 'teamwork demonstration', 'ethical thinking', 'cultural alignment', 'vocabulary']
+    HR: ['STAR format adherence', 'teamwork demonstration', 'ethical thinking', 'cultural alignment', 'vocabulary'],
+    INTRO: ['clarity of message', 'confidence', 'structure', 'relevance of content', 'brevity']
 };
 
 function validateDTO(body) {
@@ -26,10 +27,12 @@ exports.handler = async (event) => {
         const body = JSON.parse(event.body || '{}');
         validateDTO(body);
 
-        const { sessionId, textTranscript, currentConceptId, isSilence } = body;
-
+        const { sessionId, textTranscript, isSilence } = body;
+        
         const session = await getSession(sessionId);
         if (!session) throw new Error('Session not found');
+
+        const currentConceptId = body.currentConceptId || session.currentConceptId;
 
         // [Mouli Week 4: Deadlock Recovery]
         if (session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE) {
@@ -144,13 +147,14 @@ exports.handler = async (event) => {
         let onlyQuestion = "";
         
         if (session.moduleType === 'WEBSITE') {
-            const { scrapeWebsite } = require('../../lib/scraper');
-            const { getConceptsForWebsite } = require('../../models/conceptState');
+            const { fetchAndCleanContent } = require('../../lib/scraper');
+            const { getConceptsBySession } = require('../../models/conceptState');
             
             const websiteUrl = session.itemData?.websiteUrl || "";
-            const content = await scrapeWebsite(websiteUrl);
-            const concepts = await getConceptsForWebsite(websiteUrl);
-            const targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0] : "General Overview");
+            const scraped = await fetchAndCleanContent(websiteUrl);
+            const content = scraped.content;
+            const concepts = await getConceptsBySession(sessionId);
+            const targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0].conceptId : "General Overview");
 
             const prompt = buildWebsiteTeachPrompt(targetConcept, content, (await getTranscriptBySession(sessionId)).map(t => ({
                 role: t.speaker === 'USER' ? 'user' : 'assistant',
@@ -205,7 +209,8 @@ exports.handler = async (event) => {
 
         await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, {
             turnCount: session.turnCount + 1,
-            accumulatedScores: newAccumulated
+            accumulatedScores: newAccumulated,
+            currentConceptId: targetConcept
         }); 
 
         return {
@@ -218,6 +223,7 @@ exports.handler = async (event) => {
                     accumulatedScores: newAccumulated,
                     nextAIResponse: nextAIResponse,
                     onlyQuestion: onlyQuestion,
+                    currentConceptId: targetConcept,
                     state: INTERVIEW_STATES.AI_SPEAKING,
                     message: 'Turn completed.'
                 }
