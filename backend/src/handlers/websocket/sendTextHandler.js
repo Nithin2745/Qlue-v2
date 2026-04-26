@@ -226,6 +226,11 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             }
         });
 
+        // Persist the final question text to DynamoDB so reconnects can restore it
+        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
+            questionText: fullText,
+        });
+
         // FINAL SIGNAL: Send an empty chunk with isLast:true to signal completion.
         // This MUST reach the TTS service so it fires onPlaybackComplete.
         await postToConnection(connectionId, {
@@ -533,11 +538,24 @@ async function handleSessionReconnect(connectionId, body) {
     if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
         await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
     } else {
+        // Send question text separately via question_text_update to avoid
+        // duplicating the transcript entry (session_state_update adds to transcript)
+        if (session.questionText) {
+            await postToConnection(connectionId, {
+                type: 'question_text_update',
+                payload: {
+                    sessionId,
+                    turnIndex: session.turnCount,
+                    questionText: session.questionText
+                }
+            });
+        }
+        // Push state WITHOUT questionText to avoid transcript duplication
         await pushStateUpdate(
             connectionId, sessionId,
             session.currentState, session.currentState,
             session.turnCount,
-            session.questionText || "Reconnected."
+            null
         );
     }
 
