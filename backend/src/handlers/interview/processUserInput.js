@@ -121,6 +121,7 @@ exports.handler = async (event) => {
           console.error('Bedrock evaluation failed cleanly.', e);
           scores = {};
         }
+    }
 
         // --- 3. ADAPTIVE TUTORING ---
         if (session.moduleType === 'WEBSITE' && currentConceptId) {
