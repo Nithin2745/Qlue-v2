@@ -66,8 +66,11 @@ async function* synthesizeToBase64Chunks(text, options = {}) {
   for (let t = 0; t < textChunks.length; t++) {
     const chunkText = textChunks[t];
     
-    // Build SSML text with prosody and breathing for natural speech
-    const ssmlText = buildEnhancedSSML(chunkText);
+    // Build SSML: generative engine handles prosody natively, so use minimal SSML.
+    // Standard engine needs enhanced SSML with break tags for natural speech.
+    const ssmlText = engine === 'generative' 
+      ? buildMinimalSSML(chunkText) 
+      : buildEnhancedSSML(chunkText);
 
     const command = new SynthesizeSpeechCommand({
       Engine: engine,
@@ -161,8 +164,30 @@ function buildEnhancedSSML(text) {
   return '<speak>' + cleanText + '</speak>';
 }
 
+/**
+ * Builds minimal SSML for the generative engine.
+ * The generative engine handles prosody, pauses, and breathing naturally,
+ * so we only need XML-escaping + <speak> wrapper. No break tags.
+ */
+function buildMinimalSSML(text) {
+  // If already wrapped in <speak>, return as-is
+  if (text.trim().startsWith('<speak>')) return text;
+
+  // Remove any existing <speak> or </speak> fragments to avoid nesting
+  let cleanText = text.replace(/<\/?speak>/g, '').trim();
+
+  // Escape XML special characters (&, <, >)
+  cleanText = cleanText
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  return '<speak>' + cleanText + '</speak>';
+}
+
 module.exports = {
   getEstimatedDuration,
   synthesizeToBase64Chunks,
-  buildEnhancedSSML
+  buildEnhancedSSML,
+  buildMinimalSSML
 };

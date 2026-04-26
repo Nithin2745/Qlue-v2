@@ -50,6 +50,8 @@ exports.handler = async (event) => {
                 return await handleSessionInit(connectionId, body);
             case 'text_transcript':
                 return await handleTextTranscript(connectionId, body);
+            case 'silence_detected':
+                return await handleSilenceDetected(connectionId, body);
             case 'terminate_session':
                 return await handleTerminateSession(connectionId, body);
             case 'ping':
@@ -178,16 +180,13 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             fullText += token;
             sentenceBuffer += token;
 
-            // ULTRA-LOW LATENCY: Aggressive boundary detection
-            // We start synthesis as soon as we have a meaningful phrase (40+ chars with punctuation)
-            // or a full sentence boundary.
-            const isFullBoundary = /[.!?](\s|$)/.test(sentenceBuffer);
-            const isPartialBoundary = sentenceBuffer.length > 40 && /[,;:](\s|$)/.test(sentenceBuffer);
+            // Only split on full sentence boundaries to avoid choppy speech
+            const isFullBoundary = sentenceBuffer.length >= 20 && /[.!?](\s|$)/.test(sentenceBuffer);
 
-            if (isFullBoundary || isPartialBoundary) {
+            if (isFullBoundary) {
                 const sentenceToProcess = sentenceBuffer;
                 sentenceBuffer = ""; 
-                console.debug(`[Stream] Boundary detected, processing fragment: "${sentenceToProcess.substring(0, 30)}..."`);
+                console.debug(`[Stream] Sentence boundary detected, processing: "${sentenceToProcess.substring(0, 30)}..."`);
                 await processSentence(sentenceToProcess);
             }
 
@@ -212,13 +211,11 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
         console.info(`[Stream] Awaiting final background synthesis...`);
         await lastProcessPromise;
 
-        // Send the final question text as a state update so frontend persists it
+        // Send the final question text (not a state update to avoid duplicate transitions)
         await postToConnection(connectionId, {
-            type: 'session_state_update',
+            type: 'question_text_update',
             payload: {
                 sessionId,
-                previousState: 'AI_SPEAKING',
-                state: 'AI_SPEAKING',
                 turnIndex: session.turnCount,
                 questionText: fullText,
                 timestamp: Date.now()
@@ -239,10 +236,6 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
             payload: { sessionId, turnIndex: session.turnCount }
         });
 
-        // Persist the actual generated text to DynamoDB
-        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
-            questionText: fullText,
-        });
 
         console.info(`[Stream] Sequential processing complete.`);
 
@@ -468,6 +461,59 @@ async function streamPreGeneratedResponse(connectionId, sessionId, session, text
     await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
         questionText: text,
     });
+}
+
+
+/**
+ * Handles silence_detected events from the frontend.
+ * Routes through processUserInput with isSilence flag for retry/termination logic.
+ */
+async function handleSilenceDetected(connectionId, body) {
+    const { sessionId, silenceStrikes } = body.payload || {};
+    if (!sessionId) throw new Error('Missing sessionId');
+
+    const session = await getSession(sessionId);
+    if (!session) throw new Error('Session not found');
+
+    console.info(`[Silence] Detected for session ${sessionId}, strike ${silenceStrikes}`);
+
+    // Route through processUserInput with isSilence flag
+    const processRes = await processUserInput.handler({
+        body: JSON.stringify({
+            sessionId,
+            isSilence: true
+        })
+    });
+
+    if (processRes.statusCode !== 200) {
+        const errorBody = JSON.parse(processRes.body);
+        await postToConnection(connectionId, {
+            type: 'error',
+            payload: { message: errorBody.error || 'Silence processing failed' }
+        });
+        return { statusCode: 200 };
+    }
+
+    const processBody = JSON.parse(processRes.body);
+    const data = processBody.data || processBody;
+
+    // Check for termination
+    if (data.state === 'TERMINATED' || data.reason === 'SILENCE_TIMEOUT') {
+        await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
+        return { statusCode: 200 };
+    }
+
+    // Stream the retry message via TTS
+    const updatedSession = await getSession(sessionId);
+    if (data.nextAIResponse) {
+        await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is responding to silence.");
+        await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, data.nextAIResponse);
+        
+        await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING);
+        await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
+    }
+
+    return { statusCode: 200 };
 }
 
 

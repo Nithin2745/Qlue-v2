@@ -142,8 +142,8 @@ class InterviewProvider extends ChangeNotifier {
   Future<void> _connectWebSocket(String url, String token) async {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
-    // REMOVED: Unreliable local playback listener
-    // _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
+    // Wire up TTS completion: when all audio finishes playing, transition to listening
+    _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
     _isLastAudioChunkReceived = false;
     startInterview();
   }
@@ -179,11 +179,13 @@ class InterviewProvider extends ChangeNotifier {
         break;
 
       case 'ai_speaking_complete':
+        // Only update subtitle text — do NOT start listening here.
+        // Listening is triggered by TTS onPlaybackComplete callback to avoid
+        // the race condition where mic enables while AI audio is still playing.
         if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
           subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
           isStreamingText = false;
           notifyListeners();
-          _startListening(); // ✅ Start listening on backend signal
         }
         break;
 
@@ -202,6 +204,21 @@ class InterviewProvider extends ChangeNotifier {
           isStreamingText = true;
           notifyListeners();
         }
+        break;
+
+      case 'question_text_update':
+        // Handle finalized question text from backend (no state transition)
+        final questionUpdate = payload['questionText'];
+        if (questionUpdate != null && questionUpdate != "...") {
+          questionText = questionUpdate;
+          finalQuestionText = questionUpdate;
+          transcript.add(TranscriptEntry(
+            role: 'ai',
+            text: questionText,
+            timestamp: DateTime.now(),
+          ));
+        }
+        notifyListeners();
         break;
 
       case 'session_state_update':
@@ -251,7 +268,8 @@ class InterviewProvider extends ChangeNotifier {
         _stopListening();
         break;
       case 'SILENCE_DETECTED':
-        currentPhase = InterviewPhase.listening; // Ensure we stay in listening phase
+        currentPhase = InterviewPhase.processing;
+        _stopListening();
         _silenceStrikes++;
         if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
           isSessionEnded = true;
@@ -373,11 +391,15 @@ class InterviewProvider extends ChangeNotifier {
 
   void _handleSilence() {
     _silenceStrikes++;
+    // Send silence event to backend so it can trigger retry/termination logic
+    _wsClient.send('silence_detected', {
+      'sessionId': sessionId,
+      'silenceStrikes': _silenceStrikes,
+    });
+    _stopListening();
     if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
       isSessionEnded = true;
       _cleanup();
-    } else {
-      // Potentially notify user of silence
     }
     notifyListeners();
   }

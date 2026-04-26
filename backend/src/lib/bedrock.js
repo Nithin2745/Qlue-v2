@@ -127,26 +127,26 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
  * Builds the system prompt for Interview Modes (RESUME, HR, SELF_INTRO)
  */
 function buildInterviewPrompt(context, history, turnCount, moduleType) {
+  // Shared constraint for all prompts
+  const sharedConstraints = `\nNEVER use markdown, bullet points, or numbered lists. Write ONLY spoken text as if talking to someone face-to-face. Max 40 words per response. NEVER evaluate previous answers. NEVER include meta-commentary like "Great question" or "Let me think".`;
+
   let systemContent = "";
   if (moduleType === 'RESUME') {
-    systemContent = `You are an expert technical interviewer. You are conducting an interview based on the following candidate context:
-${typeof context === 'object' ? JSON.stringify(context) : context}
-
-Your goal is to ask one concise technical question.
-Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+    // Determine question type based on turn count for variety
+    const questionTypes = ['depth', 'experience', 'problem-solving'];
+    const questionType = questionTypes[turnCount % questionTypes.length];
+    
+    systemContent = `You are an expert technical interviewer. You are conducting an interview based on the following candidate resume:\n${typeof context === 'object' ? JSON.stringify(context) : context}\n\nInstructions:\n- Reference SPECIFIC items from the resume (projects, technologies, roles, companies).\n- This turn's question type: ${questionType}.\n  - "depth": Probe deeper into a specific technology or project mentioned.\n  - "experience": Ask about a real-world scenario they faced in a listed role.\n  - "problem-solving": Present a technical challenge related to their listed skills.\n- Ask exactly one concise question.\n- Return ONLY the question text. Your response will be spoken directly to the user.${sharedConstraints}`;
   } else if (moduleType === 'HR') {
-    systemContent = `You are an HR recruiter.
-Please ask one concise behavioral question using the STAR framework.
-Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+    // Progress through behavioral topics based on turn count
+    const hrTopics = ['teamwork', 'problem-solving', 'leadership', 'conflict resolution', 'adaptability'];
+    const currentTopic = hrTopics[turnCount % hrTopics.length];
+    
+    systemContent = `You are an HR recruiter conducting a behavioral interview.\nCurrent topic: ${currentTopic}.\n\nInstructions:\n- Ask one concise behavioral question about ${currentTopic} using the STAR framework.\n- Progress naturally: teamwork → problem-solving → leadership → conflict resolution → adaptability.\n- Return ONLY the question text. Your response will be spoken directly to the user.${sharedConstraints}`;
   } else if (moduleType === 'SELF_INTRO') {
-    systemContent = `You are an expert communication coach conducting a self-introduction exercise.
-Ask one concise follow-up question regarding their introduction to probe deeper.
-Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+    systemContent = `You are an expert communication coach conducting a self-introduction exercise.\nAsk one concise follow-up question regarding their introduction to probe deeper.\nReturn ONLY the question text. Your response will be spoken directly to the user.${sharedConstraints}`;
   } else {
-    systemContent = `You are an interviewer. Ask one concise question. Do not evaluate the answer. Wait for the user to respond.`;
+    systemContent = `You are an interviewer. Ask one concise question. Wait for the user to respond.${sharedConstraints}`;
   }
 
   return {
@@ -177,18 +177,13 @@ Return ONLY your response text (the verification/guidance and the next question)
 /**
  * General scoring based on module dimensions
  */
-function buildScoringPrompt(moduleType, transcript, dimensions) {
+function buildScoringPrompt(moduleType, latestResponse, dimensions) {
   return {
-    system: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
-Please score the applicant across these dimensions: ${dimensions.join(', ')}.
-Transcript:
-${JSON.stringify(transcript)}
-
-Format your output strictly as JSON mapping each dimension to a score between 1-100.`,
+    system: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.\nScore ONLY the following latest response (do NOT consider previous turns):\n"${typeof latestResponse === 'string' ? latestResponse : JSON.stringify(latestResponse)}"\n\nDimensions to evaluate: ${dimensions.join(', ')}.\n\nFormat your output strictly as JSON mapping each dimension to a score between 1-100. No markdown, no explanation, just the JSON object.`,
     messages: [
       {
         role: 'user',
-        content: [{ text: "Please score this interview based on the provided transcript and dimensions." }]
+        content: [{ text: "Score ONLY the latest response above across the listed dimensions." }]
       }
     ]
   };

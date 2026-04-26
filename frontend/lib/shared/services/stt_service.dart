@@ -79,8 +79,8 @@ class SttService {
             onPartial(result.recognizedWords);
           }
         },
-        listenFor: const Duration(seconds: 30), // FIX: reduced from 60
-        pauseFor: const Duration(seconds: 5),
+        listenFor: const Duration(seconds: 60),
+        pauseFor: const Duration(seconds: 8),
         partialResults: true,
         cancelOnError: true,
         listenMode: ListenMode.confirmation,
