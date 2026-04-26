@@ -1,7 +1,7 @@
 /**
  * Amazon Bedrock Client Wrapper specifically tuned for Qlue's Nemotron-4-340b-instruct pipeline.
  */
-const { BedrockRuntimeClient, InvokeModelCommand, InvokeModelWithResponseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { getBedrockConfig } = require('./secrets');
 const { ERROR_CODES, QlueError } = require('./errors');
@@ -18,16 +18,20 @@ const bedrockClient = new BedrockRuntimeClient({
 const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'nvidia.nemotron-super-3-120b';
 
 /**
- * Executes a Model Invocation with retries for Timeouts
+ * Executes a Model Invocation using Converse API
  */
-async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
-  const payload = Buffer.from(JSON.stringify(body));
+async function invokeModel(modelId = DEFAULT_MODEL_ID, params, options = {}) {
+  const systemPrompt = "You are Qlue, an elite technical interviewer.";
   
-  const command = new InvokeModelCommand({
-    body: payload,
+  const command = new ConverseCommand({
     modelId: modelId,
-    accept: 'application/json',
-    contentType: 'application/json'
+    messages: params.messages || [],
+    system: params.system ? [{ text: params.system }] : [{ text: systemPrompt }],
+    inferenceConfig: {
+      maxTokens: params.max_tokens || 1000,
+      temperature: params.temperature || 0.7,
+      topP: 0.9
+    }
   });
 
   const maxRetries = options.retries || 2;
@@ -37,18 +41,14 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
     try {
       const response = await bedrockClient.send(command);
       
-      let responseBody = JSON.parse(Buffer.from(response.body).toString('utf-8'));
-      
-      // Normalize response format across models (Claude vs Nemotron)
-      if (responseBody.choices && responseBody.choices[0].message) {
-        responseBody.content = [{ text: responseBody.choices[0].message.content }];
-      } else if (responseBody.choices && responseBody.choices[0].text) {
-        responseBody.content = [{ text: responseBody.choices[0].text }];
-      }
+      // Standardize response format
+      const responseBody = {
+        content: [{ text: response.output.message.content[0].text }],
+        usage: response.usage
+      };
 
       if (options.logTokens) {
-        // Log tokens usage
-        console.info(`[Bedrock Tokens] Prompt: ${responseBody.usage?.prompt_tokens || '?'}, Completion: ${responseBody.usage?.completion_tokens || '?'}`);
+        console.info(`[Bedrock Tokens] Input: ${responseBody.usage?.inputTokens || '?'}, Output: ${responseBody.usage?.outputTokens || '?'}`);
       }
 
       return responseBody;
@@ -72,114 +72,106 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, body, options = {}) {
  * @param {object} body 
  * @param {function} onToken Callback for each received token
  */
-async function invokeModelStream(modelId = DEFAULT_MODEL_ID, body, onToken) {
-    const command = new InvokeModelWithResponseStreamCommand({
-        body: JSON.stringify(body),
+async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
+    const systemPrompt = "You are Qlue, an elite technical interviewer.";
+
+    const command = new ConverseStreamCommand({
         modelId,
-        contentType: 'application/json',
-        accept: 'application/json'
+        messages: params.messages || [],
+        system: params.system ? [{ text: params.system }] : [{ text: systemPrompt }],
+        inferenceConfig: {
+            maxTokens: params.max_tokens || 1000,
+            temperature: params.temperature || 0.7,
+            topP: 0.9
+        }
     });
 
     try {
         const response = await bedrockClient.send(command);
         let fullText = "";
+        let isTimedOut = false;
+        
+        let timeoutTimer = setTimeout(() => {
+            isTimedOut = true;
+        }, 15000);
 
-        for await (const event of response.body) {
-            const chunk = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
-            
-            // Nemotron / OpenAI format
-            if (chunk.choices && chunk.choices[0].delta?.content) {
-                const token = chunk.choices[0].delta.content;
-                fullText += token;
-                if (onToken) onToken(token);
-            } else if (chunk.choices && chunk.choices[0].text) {
-                const token = chunk.choices[0].text;
+        for await (const event of response.stream) {
+            if (isTimedOut) {
+                throw new Error("BEDROCK_TIMEOUT");
+            }
+            // Reset timer on token received
+            clearTimeout(timeoutTimer);
+            timeoutTimer = setTimeout(() => {
+                isTimedOut = true;
+            }, 15000);
+
+            if (event.contentBlockDelta) {
+                const token = event.contentBlockDelta.delta.text;
                 fullText += token;
                 if (onToken) onToken(token);
             }
         }
+        clearTimeout(timeoutTimer);
         return fullText;
     } catch (error) {
         console.error('Bedrock Streaming Error:', error);
-        throw new QlueError('Bedrock Streaming Error', ERROR_CODES.BEDROCK_ERROR, 500, error.message);
+        if (error.message === 'BEDROCK_TIMEOUT' || error.name === 'TimeoutError') {
+            throw new QlueError('Bedrock stream timed out after 15 seconds of inactivity.', 'BEDROCK_TIMEOUT', 504, error.message);
+        }
+        throw new QlueError('Bedrock Streaming Error', 'BEDROCK_ERROR', 500, error.message);
     }
 }
 
 
 /**
- * Builds the system prompt for Resume technical questions
+ * Builds the system prompt for Interview Modes (RESUME, HR, SELF_INTRO)
  */
-function buildResumeQuestionPrompt(parsedData, conversationHistory, turnIndex) {
-  return [
-    {
-      role: 'system',
-      content: `You are an expert technical interviewer. You are conducting an interview based on the following candidate resume parsing:
-${JSON.stringify(parsedData)}
-Your goal is to ask a targeted, challenging technical question about their experience. Keep your question concise.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`
-    },
-    ...conversationHistory
-  ];
+function buildInterviewPrompt(context, history, turnCount, moduleType) {
+  let systemContent = "";
+  if (moduleType === 'RESUME') {
+    systemContent = `You are an expert technical interviewer. You are conducting an interview based on the following candidate context:
+${typeof context === 'object' ? JSON.stringify(context) : context}
+
+Your goal is to ask one concise technical question.
+Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
+Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+  } else if (moduleType === 'HR') {
+    systemContent = `You are an HR recruiter.
+Please ask one concise behavioral question using the STAR framework.
+Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
+Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+  } else if (moduleType === 'SELF_INTRO') {
+    systemContent = `You are an expert communication coach conducting a self-introduction exercise.
+Ask one concise follow-up question regarding their introduction to probe deeper.
+Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
+Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+  } else {
+    systemContent = `You are an interviewer. Ask one concise question. Do not evaluate the answer. Wait for the user to respond.`;
+  }
+
+  return {
+    system: systemContent,
+    messages: [
+      ...history,
+      { role: 'user', content: [{ text: turnCount === 0 ? "Let's begin the interview." : "Please ask the next question." }] }
+    ]
+  };
 }
 
 /**
- * Builds the system prompt for HR STAR format behavioral questions
+ * Builds the system prompt for Tutor Mode (WEBSITE)
  */
-function buildHRQuestionPrompt(topic, conversationHistory) {
-  return [
-    {
-      role: 'system',
-      content: `You are an HR recruiter. We are discussing the topic: ${topic}.
-Please ask a behavioral question using the STAR (Situation, Task, Action, Result) framework. Keep it concise.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`
-    },
-    ...conversationHistory
-  ];
-}
-
-/**
- * Builds the system prompt for Website conceptual teaching
- */
-function buildWebsiteTeachPrompt(concept, content, conversationHistory, isAnswering = false) {
-  const systemPrompt = isAnswering
-    ? `You are an expert mentor helping the user understand the website content provided below.
-Content: ${content}
-Currently, you are explaining the concept: "${concept}".
-
-The user has just answered your question.
-1. Evaluate the user's answer.
-2. If CORRECT: Give a warm compliment and proceed to ask the next logical question or explain the next nuance of ${concept}.
-3. If WRONG: Explain the concept correctly in simple words (2-3 lines max) and ask: "Did you understand?". Be supportive and behave like a mentor.
-Format your output strictly as a JSON object: {"response": "Your mentor response", "isCorrect": boolean}`
-    : `You are an expert mentor teaching the user about the website content provided below.
-Content: ${content}
-Goal: Teach the concept: "${concept}".
-Ask an initial question or provide a brief overview to start the conversation about "${concept}".
-Return ONLY the response text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
-
-  return [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory
-  ];
-}
-
-/**
- * Builds the system prompt for evaluating Self-Introductions
- */
-function buildSelfIntroEvalPrompt(transcript) {
-  return [
-    {
-      role: 'system',
-      content: `You are an expert communication coach. The user just gave their self-introduction.
-Please evaluate their response. 
-1. Acknowledge their effort.
-2. Identify exactly what is lacking (e.g., missing achievements, lack of structure, weak opening).
-3. Provide 2-3 actionable suggestions to make it better.
-Keep the tone encouraging.
-Format your output strictly as a JSON object: {"response": "Your coaching feedback and suggestions"}`
-    },
-    { role: 'user', content: transcript }
-  ];
+function buildTutorPrompt(websiteUrl, history, userAnswer) {
+  return {
+    system: `You are a tutor. The user is learning about content from this website: ${websiteUrl}.
+Check the user's answer for correctness. If it's incorrect or incomplete, explain their mistakes gently and provide the right approach. Then, ask the next question.
+If they are correct, confirm it and proceed to the next concept.
+Return ONLY your response text (the verification/guidance and the next question), no JSON or extra formatting. Your response will be spoken directly to the user.`,
+    messages: [
+      ...history,
+      { role: 'user', content: [{ text: userAnswer ? `My answer: ${userAnswer}` : "Let's begin." }] }
+    ]
+  };
 }
 
 /**
@@ -187,12 +179,18 @@ Format your output strictly as a JSON object: {"response": "Your coaching feedba
  */
 function buildScoringPrompt(moduleType, transcript, dimensions) {
   return {
-    prompt: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
+    system: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
 Please score the applicant across these dimensions: ${dimensions.join(', ')}.
 Transcript:
 ${JSON.stringify(transcript)}
 
-Format your output strictly as JSON mapping each dimension to a score between 1-100.`
+Format your output strictly as JSON mapping each dimension to a score between 1-100.`,
+    messages: [
+      {
+        role: 'user',
+        content: [{ text: "Please score this interview based on the provided transcript and dimensions." }]
+      }
+    ]
   };
 }
 
@@ -201,12 +199,18 @@ Format your output strictly as JSON mapping each dimension to a score between 1-
  */
 function buildFeedbackPrompt(moduleType, transcript, scores) {
   return {
-    prompt: `You are an AI Interview coach providing actionable feedback.
+    system: `You are an AI Interview coach providing actionable feedback.
 Review the following ${moduleType} session.
 Scores: ${JSON.stringify(scores)}
 Transcript: ${JSON.stringify(transcript)}
 
-Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths": [], "improvements": []}`
+Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths": [], "improvements": []}`,
+    messages: [
+      {
+        role: 'user',
+        content: [{ text: "Please provide constructive feedback based on the scores and transcript." }]
+      }
+    ]
   };
 }
 
@@ -215,21 +219,80 @@ Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths
  */
 function buildConceptExtractionPrompt(content) {
   return {
-    prompt: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
+    system: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
 Text: ${content.substring(0, 5000)}
 
-Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`
+Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`,
+    messages: [
+      {
+        role: 'user',
+        content: [{ text: "Extract concepts from the provided text." }]
+      }
+    ]
+  };
+}
+
+function buildResumeQuestionPrompt(resumeData, history, turnCount) {
+  const systemContent = `You are Qlue, an elite technical interviewer. You are conducting an interview based on the following resume data:
+${typeof resumeData === 'object' ? JSON.stringify(resumeData) : resumeData}
+
+Instructions:
+- Ask exactly one concise technical question.
+- Do not evaluate the previous answer.
+- Focus on specific technologies or projects mentioned in the resume.
+- Return ONLY the question text (or a JSON with "question" field if required by the caller).`;
+
+  const messages = [
+    ...history,
+    { role: 'user', content: [{ text: turnCount === 0 ? "Let's begin the interview." : "Generate the next technical question." }] }
+  ];
+  return { system: systemContent, messages };
+}
+
+function buildHRQuestionPrompt(context, history) {
+  const systemContent = `You are an HR recruiter. Ask one concise behavioral question using the STAR framework. Do not evaluate the previous answer.`;
+  const messages = [
+    ...history,
+    { role: 'user', content: [{ text: "Generate the next behavioral question." }] }
+  ];
+  return { system: systemContent, messages };
+}
+
+function buildWebsiteTeachPrompt(targetConcept, content, history, isEvaluation) {
+  const systemContent = `You are a tutor helping a student learn about ${targetConcept} from this content:
+${content.substring(0, 5000)}
+
+Instructions:
+- If isEvaluation is true, check the last answer and provide feedback.
+- Ask a follow-up question to test understanding.
+- Return response as JSON: {"response": "your feedback and next question", "isCorrect": true/false}`;
+
+  const messages = [
+    ...history,
+    { role: 'user', content: [{ text: isEvaluation ? "Evaluate my response and ask the next question." : `Introduce ${targetConcept} and ask a question.` }] }
+  ];
+  return { system: systemContent, messages };
+}
+
+function buildSelfIntroEvalPrompt(transcript) {
+  return {
+    system: "You are an expert communication coach. Evaluate the self-introduction provided.",
+    messages: [
+      { role: 'user', content: [{ text: `Introduction to evaluate: ${transcript}` }] }
+    ]
   };
 }
 
 module.exports = {
   invokeModel,
+  buildInterviewPrompt,
+  buildTutorPrompt,
+  buildScoringPrompt,
+  buildFeedbackPrompt,
+  buildConceptExtractionPrompt,
   buildResumeQuestionPrompt,
   buildHRQuestionPrompt,
   buildWebsiteTeachPrompt,
   buildSelfIntroEvalPrompt,
-  buildScoringPrompt,
-  buildFeedbackPrompt,
-  buildConceptExtractionPrompt,
   invokeModelStream
 };

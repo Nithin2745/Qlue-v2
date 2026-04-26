@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/websocket_client.dart';
 import '../../../core/constants/api_constants.dart';
@@ -26,8 +27,15 @@ class InterviewProvider extends ChangeNotifier {
   int currentTurnIndex = 0;
   
   String questionText = "...";
+  String finalQuestionText = ""; // The finalized question shown after AI stops speaking
+  // The streaming subtitle text (shown while AI is speaking)
+  String subtitleText = "";
+  // Whether we're currently streaming AI text
+  bool isStreamingText = false;
+  
   List<TranscriptEntry> transcript = [];
   String partialTranscript = "";
+  String finalTranscript = ""; // Last finalized user transcript for display
   
   bool isConnecting = false;
   bool isListening = false;
@@ -36,28 +44,82 @@ class InterviewProvider extends ChangeNotifier {
 
   final List<List<int>> _audioChunkQueue = [];
   int _silenceStrikes = 0;
+  int get silenceStrikes => _silenceStrikes;
   Timer? _silenceTimer;
 
   final SttService _sttService = SttService();
   final TtsService _ttsService = TtsService();
   final WebSocketClient _wsClient = WebSocketClient();
+  bool _isLastAudioChunkReceived = false;
+  bool _isStartingListening = false;
+  bool _isCleanedUp = false;
+
+
+  void resetForNewSession() {
+    isSessionEnded = false;
+    isConnecting = true;
+    _isCleanedUp = false;
+    _isStartingListening = false;
+    _isLastAudioChunkReceived = false;
+    sessionId = null;
+    subtitleText = "";
+    isStreamingText = false;
+    finalTranscript = "";
+    partialTranscript = "";
+    questionText = "";
+    finalQuestionText = "";
+    transcript.clear();
+    currentPhase = InterviewPhase.ready;
+    currentTurnIndex = 0;
+    _silenceStrikes = 0;
+    errorMessage = null;
+    _wsClient.disconnect();
+    notifyListeners();
+  }
 
 
   Future<void> initSession(String type, {String? resumeId, String? websiteUrl}) async {
+    // FULL RESET to prevent old session bleed
+    _cleanup();
+    _isCleanedUp = false;
+    _isStartingListening = false;
+    _isLastAudioChunkReceived = false;
+    
     isConnecting = true;
     isSessionEnded = false;
     _silenceStrikes = 0;
     errorMessage = null;
+    assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
     moduleType = type;
+    
+    // RESET ALL TEXT
+    subtitleText = "";
+    isStreamingText = false;
+    finalTranscript = "";
+    partialTranscript = "";
+    questionText = "";
+    finalQuestionText = "";
+    transcript.clear();
+    currentPhase = InterviewPhase.ready;
+    currentTurnIndex = 0;
+
     notifyListeners();
 
     try {
+      // Get voice from settings
+      final prefs = await SharedPreferences.getInstance();
+      final voiceId = prefs.getString('selected_voice') ?? 'Tiffany';
+      final engine = prefs.getString('selected_engine') ?? 'generative';
+
       final response = await DioClient().dio.post(
         ApiConstants.interviewInit,
         data: {
           'moduleType': type,
           if (resumeId != null) 'resumeId': resumeId,
           if (websiteUrl != null) 'websiteUrl': websiteUrl,
+          'voiceId': voiceId,
+          'engine': engine,
+          'force': true,
         },
       );
 
@@ -80,7 +142,9 @@ class InterviewProvider extends ChangeNotifier {
   Future<void> _connectWebSocket(String url, String token) async {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
-    _ttsService.onPlaybackComplete = onAudioPlaybackComplete;
+    // REMOVED: Unreliable local playback listener
+    // _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
+    _isLastAudioChunkReceived = false;
     startInterview();
   }
 
@@ -102,13 +166,49 @@ class InterviewProvider extends ChangeNotifier {
       case 'tts_audio_chunk':
         final base64Data = payload['audioData'] ?? '';
         final isLast = payload['isLast'] == true;
-        _ttsService.playBase64Chunk(base64Data, isLast);
+
+        if (isLast) {
+          _isLastAudioChunkReceived = true;
+        }
+
+        if (base64Data.isNotEmpty) {
+          _ttsService.playBase64Chunk(base64Data, isLast);
+        }
+
+        // Transitioning is now handled by ai_speaking_complete
         break;
 
+      case 'ai_speaking_complete':
+        if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
+          subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
+          isStreamingText = false;
+          notifyListeners();
+          _startListening(); // ✅ Start listening on backend signal
+        }
+        break;
+
+      case 'session_text_stream':
+        final streamText = payload?['text'] ?? msg['text'] ?? '';
+        final status = payload?['status'] ?? '';
+        
+        if (status == 'thinking') {
+          if (subtitleText.isEmpty) {
+            subtitleText = "Thinking...";
+          }
+          isStreamingText = true;
+          notifyListeners();
+        } else if (streamText.isNotEmpty) {
+          subtitleText = streamText;
+          isStreamingText = true;
+          notifyListeners();
+        }
+        break;
 
       case 'session_state_update':
-        questionText = payload['questionText'] ?? questionText;
-        if (payload['questionText'] != null) {
+        final newQuestion = payload['questionText'];
+        if (newQuestion != null && newQuestion != "...") {
+          questionText = newQuestion;
+          finalQuestionText = newQuestion; // Store finalized question
           transcript.add(TranscriptEntry(
             role: 'ai',
             text: questionText,
@@ -116,7 +216,7 @@ class InterviewProvider extends ChangeNotifier {
           ));
         }
 
-        final state = payload['state'];
+        final state = payload?['state'];
         _updatePhaseFromState(state);
         break;
 
@@ -129,15 +229,18 @@ class InterviewProvider extends ChangeNotifier {
 
       case 'error':
         errorMessage = payload['message'];
+        isStreamingText = false; // FIX: reset streaming flag
         notifyListeners();
         break;
     }
   }
 
-  void _updatePhaseFromState(String state) {
+  void _updatePhaseFromState(String? state) {
+    if (state == null) return;
     switch (state) {
       case 'AI_SPEAKING':
         currentPhase = InterviewPhase.speaking;
+        _stopListening(); // ✅ Force mic off immediately
         break;
       case 'USER_RESPONDING':
         currentPhase = InterviewPhase.listening;
@@ -148,6 +251,7 @@ class InterviewProvider extends ChangeNotifier {
         _stopListening();
         break;
       case 'SILENCE_DETECTED':
+        currentPhase = InterviewPhase.listening; // Ensure we stay in listening phase
         _silenceStrikes++;
         if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
           isSessionEnded = true;
@@ -158,24 +262,29 @@ class InterviewProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void onAudioPlaybackComplete() {
-    _audioChunkQueue.clear();
-    if (currentPhase == InterviewPhase.speaking) {
-      // The backend might set us to listening via session_state_update, 
-      // but if not, we transition manually or wait for the update.
-      // Instructions say: onAudioPlaybackComplete() clears queue, transitions phase to listening
+  Future<void> onAudioPlaybackComplete() async {
+    if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
       currentPhase = InterviewPhase.listening;
-      _startListening();
+      isStreamingText = false;
+      subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
       notifyListeners();
+      _startListening();
     }
   }
 
-  void sendTranscript(String text) {
+  void sendTextTranscript(String text) {
+    // ✅ Block if AI is speaking or session ended
+    if (currentPhase == InterviewPhase.speaking || isSessionEnded) {
+      debugPrint('Blocked transcript send: AI is speaking or session ended');
+      return;
+    }
+    
     transcript.add(TranscriptEntry(
       role: 'user',
       text: text,
       timestamp: DateTime.now(),
     ));
+    finalTranscript = text;
     _wsClient.send('text_transcript', {
       'sessionId': sessionId,
       'text': text,
@@ -201,24 +310,44 @@ class InterviewProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _startListening() {
-    isListening = true;
-    _resetSilenceTimer();
-    _sttService.startListening(
-      onPartial: (text) {
-        partialTranscript = text;
-        _resetSilenceTimer();
-        notifyListeners();
-      },
-      onFinal: (text) {
-        partialTranscript = "";
+  void _startListening() async {
+    if (_isStartingListening) return;
+    _isStartingListening = true;
+    
+    try {
+      errorMessage = null; // Clear previous errors
+      isListening = true;
+      _resetSilenceTimer();
+      
+      // FIX: Ensure STT is ready
+      final ready = await _sttService.init();
+      if (!ready) {
+        errorMessage = "Microphone not available";
         isListening = false;
-        _stopSilenceTimer();
-        sendTranscript(text);
         notifyListeners();
-      },
-    );
-    notifyListeners();
+        return;
+      }
+      
+      _sttService.startListening(
+        onPartial: (text) {
+          if (currentPhase != InterviewPhase.listening) return;
+          partialTranscript = text;
+          _resetSilenceTimer();
+          notifyListeners();
+        },
+        onFinal: (text) {
+          // REMOVED: Phase guard to prevent dropping transcripts if state changed quickly
+          partialTranscript = "";
+          isListening = false;
+          _stopSilenceTimer();
+          sendTextTranscript(text);
+          notifyListeners();
+        },
+      );
+      notifyListeners();
+    } finally {
+      _isStartingListening = false;
+    }
   }
 
   void _stopListening() {
@@ -254,8 +383,11 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _cleanup() {
+    if (_isCleanedUp) return;
+    _isCleanedUp = true;
     _stopListening();
     _stopSilenceTimer();
     _wsClient.disconnect();
+    sessionId = null; // ADD THIS
   }
 }

@@ -26,7 +26,7 @@ void main() async {
     ),
   );
   await GoogleSignIn.instance.initialize(
-    clientId: kIsWeb ? '425417594832-ka8njkac1kd9h7sut8ojjmqg3jed5l7t.apps.googleusercontent.com' : null,
+    clientId: kIsWeb ? (dotenv.env['GOOGLE_CLIENT_ID'] ?? '') : null,
   );
   
   runApp(const QlueApp());

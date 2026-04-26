@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:feather_icons/feather_icons.dart';
 import 'package:go_router/go_router.dart';
 import 'dot_matrix_painter.dart';
 import '../../core/theme.dart';
-import '../../components/glass_card.dart';
 import '../../features/interview/providers/interview_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -13,12 +11,14 @@ class InterviewSessionScreen extends StatefulWidget {
   final String? interviewId;
   final String? resumeId;
   final String? websiteUrl;
+  final String? moduleType;
 
   const InterviewSessionScreen({
     super.key, 
     this.interviewId,
     this.resumeId,
     this.websiteUrl,
+    this.moduleType,
   });
 
   @override
@@ -33,43 +33,85 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
   double _time = 0;
   double _intensity = 0.0;
   
-  Offset? _tapOffset;
-  double _lastTapTime = 0;
+  bool _isEnding = false;
+  bool _hasNavigated = false;
+
+  late VoidCallback _providerListener;
 
   @override
   void initState() {
     super.initState();
-    
-    _animationController = AnimationController(vsync: this, duration: const Duration(days: 1))
-      ..addListener(() {
+
+    // CRITICAL: Reset provider to prevent redirect from old session
+    final provider = context.read<InterviewProvider>();
+    provider.resetForNewSession();
+
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(days: 1),
+    )..addListener(() {
         if (!mounted) return;
         setState(() => _time += 0.016);
       });
     _animationController.repeat();
 
-    _intensityController = AnimationController(vsync: this, duration: const Duration(milliseconds: 500))
-      ..addListener(() {
+    _intensityController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    )..addListener(() {
         if (!mounted) return;
         setState(() => _intensity = _intensityController.value);
       });
 
-    // Initialize Real Session
+    _providerListener = () {
+      if (mounted) {
+        _simulateIntensity(provider.currentPhase);
+      }
+    };
+    provider.addListener(_providerListener);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final type = widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR');
-      context.read<InterviewProvider>().initSession(
-        type, 
+      final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
+      assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
+
+      provider.initSession(
+        type,
         resumeId: widget.resumeId,
         websiteUrl: widget.websiteUrl,
       );
     });
   }
 
-  void _handleTap(TapDownDetails details, BoxConstraints constraints) {
-    // Calculate local position relative to the 360x360 box
-    setState(() {
-      _tapOffset = details.localPosition;
-      _lastTapTime = _time;
-    });
+  void _handleEnd(InterviewProvider provider) async {
+    if (_isEnding) return;
+    setState(() => _isEnding = true);
+    await provider.endSession();
+  }
+
+
+
+  void _showEndInterviewDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: const Text("End Interview?", style: TextStyle(color: Colors.white)),
+        content: const Text("Are you sure you want to end this session?", style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("CANCEL", style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _handleEnd(context.read<InterviewProvider>());
+            },
+            child: const Text("END SESSION", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
   }
 
   bool _isSimulating = false;
@@ -79,11 +121,12 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     _isSimulating = true;
     
     Future.doWhile(() async {
-      if (!mounted || (phase != InterviewPhase.speaking && phase != InterviewPhase.listening)) {
+      final currentPhase = context.read<InterviewProvider>().currentPhase;
+      if (!mounted || (currentPhase != InterviewPhase.speaking && currentPhase != InterviewPhase.listening)) {
         _isSimulating = false;
         return false;
       }
-      final target = 0.1 + math.Random().nextDouble() * (phase == InterviewPhase.speaking ? 0.4 : 0.8);
+      final target = 0.1 + math.Random().nextDouble() * (currentPhase == InterviewPhase.speaking ? 0.4 : 0.8);
       if (mounted) {
         _intensityController.animateTo(target, duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
       }
@@ -94,6 +137,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
   @override
   void dispose() {
+    context.read<InterviewProvider>().removeListener(_providerListener);
     _animationController.dispose();
     _intensityController.dispose();
     super.dispose();
@@ -101,145 +145,245 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
   @override
   Widget build(BuildContext context) {
-    final t = AppThemeColors.of(context);
+    final t = AppThemeColors.dark;
     final provider = context.watch<InterviewProvider>();
-    
-    // Auto-End Navigation
-    if (provider.isSessionEnded) {
-       WidgetsBinding.instance.addPostFrameCallback((_) {
-         if (mounted) context.pushReplacement('/feedback/${provider.sessionId}');
-       });
+    final isTutor = provider.moduleType == 'WEBSITE';
+    final isConnecting = provider.isConnecting;
+    final isAiSpeaking = provider.currentPhase == InterviewPhase.speaking;
+    final isListening = provider.currentPhase == InterviewPhase.listening;
+
+    // AUTO-END INTERVIEW
+    if (provider.isSessionEnded && !_hasNavigated) {
+      _hasNavigated = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          if (isTutor) {
+            context.go('/dashboard');
+          } else {
+            context.pushReplacement('/feedback/${provider.sessionId}');
+          }
+        }
+      });
     }
 
-    final interviewPhase = provider.currentPhase;
-    bool isAiSpeaking = interviewPhase == InterviewPhase.speaking;
-    bool isListening = interviewPhase == InterviewPhase.listening;
-    bool isProcessing = interviewPhase == InterviewPhase.processing;
-    bool isConnecting = provider.isConnecting;
+    // Determine status text for bottom
+    String statusText = "";
+    if (isConnecting) {
+      statusText = "Establishing connection...";
+    } else if (isAiSpeaking && provider.isStreamingText) {
+      statusText = "Qlue is thinking...";
+    } else if (isAiSpeaking) {
+      statusText = "Qlue is speaking...";
+    } else if (isListening) {
+      statusText = provider.silenceStrikes > 0 ? "Waiting for your response..." : "Listening...";
+    }
 
-    // STATE-SPECIFIC CHROMATICS
-    Color activeColor = t.primary; 
-    if (isListening) activeColor = Colors.orangeAccent;
-    if (isProcessing) activeColor = Colors.blueAccent;
-    if (isConnecting) activeColor = Colors.white.withValues(alpha: 0.3);
+    // Determine AI text to show at top
+    String aiText = "";
+    if (!isConnecting) {
+      if (provider.isStreamingText && provider.subtitleText.isNotEmpty) {
+        aiText = provider.subtitleText;
+      } else if (provider.finalQuestionText.isNotEmpty) {
+        aiText = provider.finalQuestionText;
+      } else if (provider.questionText.isNotEmpty && provider.questionText != "...") {
+        aiText = provider.questionText;
+      }
+    }
+
+    // Determine user text to show at bottom
+    String userText = "";
+    if (provider.isListening && provider.partialTranscript.isNotEmpty) {
+      userText = provider.partialTranscript;
+    } else if (provider.finalTranscript.isNotEmpty) {
+      userText = provider.finalTranscript;
+    }
+
+    // Determine sphere color
+    Color sphereColor;
+    if (isConnecting) {
+      sphereColor = Colors.white;
+    } else if (isAiSpeaking) {
+      sphereColor = t.emeraldPrimary; // Blue-ish emerald when AI speaks
+    } else if (isListening) {
+      sphereColor = Colors.orangeAccent; // Orange when listening
+    } else {
+      sphereColor = Colors.white;
+    }
 
     return Scaffold(
-      backgroundColor: Colors.black, 
+      backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // 1. THE LAYOUT ENGINE
+          // Spectral Background
+          Positioned.fill(
+            child: CustomPaint(
+              painter: AiDotMatrixPainter(
+                time: _time,
+                intensity: _intensity,
+                baseColor: sphereColor,
+                isInwards: !isAiSpeaking,
+                tapOffset: null,
+                tapTime: 0,
+              ),
+              size: Size.infinite,
+            ),
+          ),
+
+          // Safe area content
           SafeArea(
             child: Column(
               children: [
-                // TOP: GHOST BACK BUTTON
+                // TOP BAR
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      GestureDetector(
-                        onTap: () => context.pop(),
-                        child: SizedBox(
-                          width: 44,
-                          height: 44,
-                          child: GlassCard(
-                            borderRadius: 12,
-                            padding: EdgeInsets.zero,
-                            hasMetallicBorder: true,
-                            child: Center(child: Icon(FeatherIcons.chevronLeft, color: Colors.white, size: 20)),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: t.emeraldPrimary.withValues(alpha: 0.3),
+                            width: 1,
+                          ),
+                        ),
+                        child: Text(
+                          "INTERVIEW MODE",
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w900,
+                            color: t.emeraldPrimary.withValues(alpha: 0.6),
+                            letterSpacing: 4,
                           ),
                         ),
                       ),
-                      const Spacer(),
+                      GestureDetector(
+                        onTap: () => _showEndInterviewDialog(context),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: Colors.redAccent.withValues(alpha: 0.3),
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            "END",
+                            style: TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                              fontFamily: 'monospace',
+                              letterSpacing: 2,
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
 
-                // AI SYSTEM BROADCAST (Scrollable)
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    alignment: Alignment.bottomCenter,
-                    child: SingleChildScrollView(
-                      reverse: true, // Keep latest text visible
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(isConnecting ? "ESTABLISHING NEURAL LINK" : "SYSTEM BROADCAST", 
-                            style: TextStyle(fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.w900, color: Colors.white.withValues(alpha: 0.1), letterSpacing: 4)),
-                          const SizedBox(height: 12),
-                          Text(
-                            isConnecting ? "Connecting..." : provider.questionText,
-                            style: const TextStyle(fontSize: 18, fontFamily: 'monospace', fontWeight: FontWeight.w700, color: Colors.white, height: 1.3, letterSpacing: -0.8),
-                            textAlign: TextAlign.center,
+                // AI QUESTION TEXT (TOP) - Plain white text like initial version
+                if (aiText.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      child: SingleChildScrollView(
+                        child: Text(
+                          aiText,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w600,
+                            color: isTutor ? Colors.tealAccent : Colors.white.withValues(alpha: 0.9),
+                            height: 1.4,
+                            letterSpacing: -0.5,
                           ),
-                        ],
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ),
                   ),
-                ),
 
-                // THE SPECTRAL CORE
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  child: SizedBox(
-                    width: 320,
-                    height: 320,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        return GestureDetector(
-                          onTapDown: (details) => _handleTap(details, constraints),
-                          child: RepaintBoundary(
-                            child: CustomPaint(
-                              painter: AiDotMatrixPainter(
-                                time: _time,
-                                baseColor: activeColor,
-                                intensity: isConnecting ? 0.05 : _intensity,
-                                isInwards: isListening,
-                                tapOffset: _tapOffset,
-                                tapTime: _lastTapTime,
-                              ),
-                            ),
+                // SPACER - pushes content to center/bottom
+                const Spacer(),
+
+                // CENTER SPHERE AREA (empty, sphere is in background)
+                const SizedBox(height: 200),
+
+                const Spacer(),
+
+                // USER TRANSCRIPTION (BOTTOM)
+                if (userText.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 100),
+                      child: SingleChildScrollView(
+                        child: Text(
+                          userText,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w500,
+                            color: Colors.orangeAccent.withValues(alpha: 0.8),
+                            height: 1.4,
+                            letterSpacing: -0.3,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // STATUS TEXT (BOTTOM)
+                if (statusText.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 24, top: 8),
+                    child: Text(
+                      statusText,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white.withValues(alpha: 0.4),
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+
+                // SILENCE STRIKES INDICATOR
+                if (provider.silenceStrikes > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(3, (index) {
+                        return Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: index < provider.silenceStrikes
+                                ? Colors.redAccent.withValues(alpha: 0.8)
+                                : Colors.white.withValues(alpha: 0.1),
                           ),
                         );
-                      }
+                      }),
                     ),
                   ),
-                ),
-
-                // USER SIGNAL CAPTURE (Scrollable)
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    alignment: Alignment.topCenter,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (isListening && provider.partialTranscript.isNotEmpty) ...[
-                            Text(
-                              provider.partialTranscript,
-                              style: TextStyle(fontSize: 16, fontFamily: 'monospace', color: Colors.orangeAccent.withValues(alpha: 0.7), fontStyle: FontStyle.italic),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 12),
-                          ],
-                          Text(
-                            isConnecting ? "ENCRYPTING" : (isProcessing ? "NEURAL PROCESSING" : (isAiSpeaking ? "SIGNAL BROADCAST" : "SIGNAL CAPTURE")),
-                            style: TextStyle(fontSize: 10, fontFamily: 'monospace', fontWeight: FontWeight.w900, color: activeColor.withValues(alpha: 0.2), letterSpacing: 6),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 40),
               ],
             ),
           ),
         ],
       ),
     );
-
   }
 }

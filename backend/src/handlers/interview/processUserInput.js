@@ -1,8 +1,9 @@
 const { getSession, updateSessionState } = require('../../models/session');
-const { SPEAKERS, saveTranscript } = require('../../models/transcript');
+const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../../models/transcript');
 const { transitionState, INTERVIEW_STATES } = require('./controlTurnFlow');
 const { invokeModel, buildScoringPrompt, buildWebsiteTeachPrompt, buildSelfIntroEvalPrompt } = require('../../lib/bedrock');
 const { CONCEPT_STATES, updateConceptState } = require('../../models/conceptState');
+const { success, internalError } = require('../../lib/response');
 const generateQuestion = require('./generateQuestion');
 const terminateSession = require('./terminateSession');
 
@@ -38,10 +39,13 @@ exports.handler = async (event) => {
                 return {
                     statusCode: 200,
                     body: JSON.stringify({
-                        sessionId,
-                        nextAIResponse: "Sorry, I lost my train of thought. Let's continue where we left off.",
-                        state: INTERVIEW_STATES.AI_SPEAKING,
-                        message: 'Recovered from Deadlock.'
+                        success: true,
+                        data: {
+                            sessionId,
+                            nextAIResponse: "Sorry, I lost my train of thought. Let's continue where we left off.",
+                            state: INTERVIEW_STATES.AI_SPEAKING,
+                            message: 'Recovered from Deadlock.'
+                        }
                     })
                 };
             }
@@ -51,6 +55,9 @@ exports.handler = async (event) => {
             throw new Error(`Cannot process input while in state: ${session.currentState}`);
         }
 
+        // --- 0. INITIAL TRANSITION ---
+        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
+
         // --- 1. SILENCE NEGOTIATION W/ RETRIES ---
         if (isSilence) {
             await transitionState(sessionId, INTERVIEW_STATES.SILENCE_DETECTED);
@@ -58,7 +65,8 @@ exports.handler = async (event) => {
             
             // Strike 3 = Timeout Terminal State
             if (silRetries >= 3) {
-                return await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'SILENCE_TIMEOUT' }) });
+                const termRes = await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'SILENCE_TIMEOUT' }) });
+                return termRes;
             }
 
             // Fallback / Active Checks
@@ -72,19 +80,20 @@ exports.handler = async (event) => {
             return {
                 statusCode: 200,
                 body: JSON.stringify({
-                    sessionId,
-                    nextAIResponse: retryMessage,
-                    state: INTERVIEW_STATES.AI_SPEAKING,
-                    silenceRetries: silRetries,
-                    message: 'Silence protocol engaged. Retrying.'
+                    success: true,
+                    data: {
+                        sessionId,
+                        nextAIResponse: retryMessage,
+                        state: INTERVIEW_STATES.AI_SPEAKING,
+                        silenceRetries: silRetries,
+                        message: 'Silence protocol engaged. Retrying.'
+                    }
                 })
             };
         }
 
 
         // --- 2. STANDARD PROCESS PIPELINE ---
-        
-        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
 
         if (session.silenceRetries > 0) {
             await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.PROCESSING_RESPONSE, { silenceRetries: 0 });
@@ -97,10 +106,16 @@ exports.handler = async (event) => {
         
         let scores = {};
         try {
-            const bedrockResult = await invokeModel(undefined, promptParams);
-            if (bedrockResult) scores = bedrockResult; 
+          const bedrockResult = await invokeModel(undefined, promptParams);
+          if (bedrockResult?.content?.[0]?.text) {
+            const rawText = bedrockResult.content[0].text.trim();
+            // Strip markdown code fences if present
+            const jsonText = rawText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+            scores = JSON.parse(jsonText);
+          }
         } catch (e) {
-            console.error('Bedrock evaluation failed cleanly.', e);
+          console.error('Bedrock evaluation failed cleanly.', e);
+          scores = {};
         }
 
         // --- 3. ADAPTIVE TUTORING ---
@@ -120,7 +135,8 @@ exports.handler = async (event) => {
         const sessionAgeMs = Date.now() - new Date(session.startTime).getTime();
         if (sessionAgeMs > 15 * 60 * 1000) {
             await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.PROCESSING_RESPONSE, { accumulatedScores: newAccumulated });
-            return await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'TIME_LIMIT' }) });
+            const termRes = await terminateSession.handler({ body: JSON.stringify({ sessionId, reason: 'TIME_LIMIT' }) });
+            return termRes;
         }
 
         // --- 5. GENERATE NEXT RESPONSE (Specialized for Tutor Mode) ---
@@ -138,10 +154,10 @@ exports.handler = async (event) => {
 
             const prompt = buildWebsiteTeachPrompt(targetConcept, content, (await getTranscriptBySession(sessionId)).map(t => ({
                 role: t.speaker === 'USER' ? 'user' : 'assistant',
-                content: t.text
+                content: [{ text: t.text }]
             })), true);
             
-            const bedrockResult = await invokeModel(undefined, { messages: prompt });
+            const bedrockResult = await invokeModel(undefined, prompt);
             if (bedrockResult.content?.[0]?.text) {
                 try {
                     const parsed = JSON.parse(bedrockResult.content[0].text);
@@ -157,9 +173,14 @@ exports.handler = async (event) => {
                     onlyQuestion = nextAIResponse;
                 }
             }
+
+            if (!nextAIResponse) {
+                nextAIResponse = `Let's talk about ${targetConcept}. What do you know about it so far?`;
+                onlyQuestion = nextAIResponse;
+            }
         } else if (session.moduleType === 'INTRO') {
             const prompt = buildSelfIntroEvalPrompt(textTranscript);
-            const bedrockResult = await invokeModel(undefined, { messages: prompt });
+            const bedrockResult = await invokeModel(undefined, prompt);
             
             if (bedrockResult.content?.[0]?.text) {
                 try {
@@ -171,21 +192,15 @@ exports.handler = async (event) => {
                     onlyQuestion = nextAIResponse;
                 }
             }
-        } else {
-            // Standard Interview Flow
-            const genQstnEvent = {
-                body: JSON.stringify({ sessionId, moduleType: session.moduleType, currentConceptId })
-            };
-            const genQstnRes = await generateQuestion.handler(genQstnEvent);
-            const bodyJson = JSON.parse(genQstnRes.body);
-            const resolvedFollowUpData = bodyJson.data;
 
-            if (!bodyJson.success || !resolvedFollowUpData) {
-                throw new Error('Follow-up question generation failed');
+            if (!nextAIResponse) {
+                nextAIResponse = "Thanks for that introduction! I've noted your background. Let's move on to the next part of our session.";
+                onlyQuestion = nextAIResponse;
             }
-
-            nextAIResponse = resolvedFollowUpData.aiResponse;
-            onlyQuestion = resolvedFollowUpData.onlyQuestion || nextAIResponse;
+        } else {
+            // Standard Interview Flow — generation handled by sendTextHandler via streaming
+            nextAIResponse = null; // Will be generated by sendTextHandler
+            onlyQuestion = null;
         }
 
         await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, {

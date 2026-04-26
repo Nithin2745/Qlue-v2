@@ -1076,7 +1076,7 @@ Resources:
       Handler: handlers/websocket/disconnectHandler.handler
       CodeUri: src/
       MemorySize: 256
-      Timeout: 30
+      Timeout: 10
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
@@ -1087,7 +1087,7 @@ Resources:
       Handler: handlers/websocket/sendTextHandler.handler
       CodeUri: src/
       MemorySize: 512
-      Timeout: 120
+      Timeout: 29
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
@@ -1409,6 +1409,27 @@ Resources:
       Policies:
         - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+
+  ValidateWebsiteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers/website/validateWebsite.handler
+      CodeUri: src/
+      MemorySize: 512
+      Timeout: 30
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /website/validate
+            Method: post
+            RestApiId: !Ref RestApi
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel'], Resource: '*' }]
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
   # ==============================================================================
   # CLOUDWATCH ALARMS
@@ -1490,3 +1511,11 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: GreaterThanThreshold
+
+Outputs:
+  RestApiUrl:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+  WebSocketUrl:
+    Description: "WebSocket endpoint URL for Prod stage"
+    Value: !Sub "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"

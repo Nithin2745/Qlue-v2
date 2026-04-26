@@ -24,7 +24,12 @@ class WebSocketClient {
   String? _lastUrl;
 
   Future<void> connect(String url, String token) async {
-    final fullUrl = '$url?token=$token';
+    final uri = Uri.parse(url);
+    final queryParams = Map<String, String>.from(uri.queryParameters);
+    if (token.isNotEmpty && !queryParams.containsKey('token')) {
+      queryParams['token'] = token;
+    }
+    final fullUrl = uri.replace(queryParameters: queryParams).toString();
     _lastUrl = fullUrl;
     _status = WebSocketStatus.connecting;
     
@@ -69,8 +74,7 @@ class WebSocketClient {
     _reconnectAttempts++;
     Timer(Duration(milliseconds: delay), () {
       if (_status == WebSocketStatus.disconnected && _lastUrl != null) {
-        final uri = Uri.parse(_lastUrl!);
-        connect(uri.origin + uri.path, uri.queryParameters['token'] ?? '');
+        connect(_lastUrl!, ''); // FIX: pass full URL directly, token is already in query string
       }
     });
   }

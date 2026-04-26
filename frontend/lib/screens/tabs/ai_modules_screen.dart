@@ -382,7 +382,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
             } else if (_selectedResume == null) {
               _showResumePopup();
             } else {
-              context.push('/interview/session/new?resumeId=${_selectedResume!.resumeId}');
+              context.push('/interview/session/new?moduleType=RESUME&resumeId=${_selectedResume!.resumeId}');
             }
           },
         ),
@@ -394,7 +394,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
           "Analyze your culture fit.",
           "HR",
           "assets/images/hr.png",
-          onStartTap: () => context.push('/interview/session/new?type=HR'),
+          onStartTap: () => context.push('/interview/session/new?moduleType=HR'),
         ),
       ],
     );
@@ -441,21 +441,21 @@ class _AIModulesScreenState extends State<AIModulesScreen>
             }
 
             final uri = Uri.tryParse(url);
-            if (uri == null || !uri.hasAbsolutePath) {
+            if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
               Notify.error(context, "Invalid URL format.");
               return;
             }
 
             setState(() => _isValidatingUrl = true);
             try {
-              final response = await context.read<DioClient>().dio.post(
+              final response = await DioClient().dio.post(
                 ApiConstants.websiteValidate,
                 data: {'websiteUrl': url},
               );
 
               if (response.data['isEducational'] == true) {
                 if (mounted) {
-                  context.push('/interview/session/new?websiteUrl=${Uri.encodeComponent(url)}');
+                  context.push('/interview/session/new?moduleType=WEBSITE&websiteUrl=${Uri.encodeComponent(url)}');
                 }
               } else {
                 if (mounted) {
@@ -477,7 +477,7 @@ class _AIModulesScreenState extends State<AIModulesScreen>
           "Evaluate clarity and delivery.",
           "Intro",
           "assets/images/SelfIntro.png",
-          onStartTap: () => context.push('/interview/session/new?type=INTRO'),
+          onStartTap: () => context.push('/interview/session/new?moduleType=INTRO'),
         ),
       ],
     );

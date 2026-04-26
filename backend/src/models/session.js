@@ -22,6 +22,7 @@ const INTERVIEW_STATES = {
  * Creates a new interview session in DynamoDB.
  */
 async function createSession(sessionId, userId, moduleType, itemData = {}) {
+    const now = new Date().toISOString();
     const session = {
         sessionId,
         userId,
@@ -30,7 +31,8 @@ async function createSession(sessionId, userId, moduleType, itemData = {}) {
         voiceId: itemData.voiceId || 'Tiffany',
         currentState: INTERVIEW_STATES.INITIALIZING,
         turnCount: 0,
-        startTime: new Date().toISOString(),
+        startTime: now,
+        updatedAt: now, // FIX: added
         silenceRetries: 0,
         accumulatedScores: {},
         activeMarker: "ACTIVE" // Used for Sparse GSI pattern
@@ -109,12 +111,18 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         updateExpression += ", accumulatedScores = :accumulatedScores";
         expressionAttributeValues[":accumulatedScores"] = updates.accumulatedScores;
     }
+
+    if (updates.questionText !== undefined) {
+        updateExpression += ", questionText = :questionText";
+        expressionAttributeValues[":questionText"] = updates.questionText;
+    }
     
     // Cleanup active marker if terminated
+    let removeExpression = "";
     if (newState === INTERVIEW_STATES.TERMINATED || newState === INTERVIEW_STATES.ERROR || newState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
-        updateExpression += " REMOVE activeMarker";
+        removeExpression = " REMOVE activeMarker";
         if (updates.terminationReason) {
-            updateExpression += " SET terminationReason = :terminationReason";
+            updateExpression += ", terminationReason = :terminationReason";
             expressionAttributeValues[":terminationReason"] = updates.terminationReason;
         }
     }
@@ -122,7 +130,7 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
     const command = new UpdateCommand({
         TableName: SESSIONS_TABLE,
         Key: { sessionId },
-        UpdateExpression: updateExpression,
+        UpdateExpression: updateExpression + removeExpression,
         ExpressionAttributeValues: expressionAttributeValues,
         ConditionExpression: conditionExpression,
         ReturnValues: "ALL_NEW"

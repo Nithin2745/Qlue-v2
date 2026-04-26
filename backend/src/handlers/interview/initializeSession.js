@@ -17,27 +17,36 @@ exports.handler = async (event) => {
         // [Mouli Week 4: Voice Selection] Fetch user's preferred voice
         console.debug(`Fetching user profile for ${userId}...`);
         const user = await getUserById(userId);
-        const voiceId = user?.voiceId || 'Tiffany';
+        const voiceId = body.voiceId || user?.voiceId || 'Tiffany';
 
         // [Mouli Week 4: Concurrency Lock]
         console.debug(`Checking for active sessions for ${userId}...`);
         const activeSession = await getActiveSessionForUser(userId);
         if (activeSession) {
-            console.warn(`Concurrent session detected for ${userId}: ${activeSession.sessionId}`);
-            return {
-                statusCode: 409,
-                body: JSON.stringify({
-                    error: 'ConcurrentSessionError',
-                    message: 'User already has an active interview session.',
-                    activeSessionId: activeSession.sessionId
-                })
-            };
+            if (body.force) {
+                console.info(`Force terminating existing session ${activeSession.sessionId} for ${userId}`);
+                const terminateSession = require('./terminateSession');
+                await terminateSession.handler({
+                    body: JSON.stringify({ sessionId: activeSession.sessionId, reason: 'USER_INITIATED' })
+                });
+            } else {
+                console.warn(`Concurrent session detected for ${userId}: ${activeSession.sessionId}`);
+                return {
+                    statusCode: 409,
+                    body: JSON.stringify({
+                        error: 'ConcurrentSessionError',
+                        message: 'User already has an active interview session.',
+                        activeSessionId: activeSession.sessionId
+                    })
+                };
+            }
         }
 
         const sessionId = randomUUID();
         const itemData = { voiceId };
         if (body.resumeId) itemData.resumeId = body.resumeId;
         if (body.websiteUrl) itemData.websiteUrl = body.websiteUrl;
+        if (body.engine) itemData.engine = body.engine;
 
         console.info(`Creating new session ${sessionId} for ${userId} (Module: ${moduleType})`);
         await createSession(sessionId, userId, moduleType, itemData);
@@ -45,7 +54,14 @@ exports.handler = async (event) => {
 
         // WEBSOCKET_ENDPOINT is set by SAM template as https://... but frontend needs wss://
         const wsHttpEndpoint = process.env.WEBSOCKET_ENDPOINT || '';
-        const wsUrl = wsHttpEndpoint.replace('https://', 'wss://');
+        let wsUrl = '';
+        if (wsHttpEndpoint) {
+          wsUrl = wsHttpEndpoint.startsWith('https://') 
+            ? wsHttpEndpoint.replace('https://', 'wss://') 
+            : wsHttpEndpoint;
+        } else {
+          wsUrl = process.env.WS_FALLBACK_URL || '';
+        }
 
         return {
             statusCode: 200,

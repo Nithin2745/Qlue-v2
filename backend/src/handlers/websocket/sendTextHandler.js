@@ -1,5 +1,6 @@
+const { getSession, INTERVIEW_STATES, updateSessionState } = require('../../models/session');
 const { postToConnection } = require('../../lib/websocket');
-const { getSession, INTERVIEW_STATES } = require('../../models/session');
+const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../../models/transcript');
 const { pushStateUpdate } = require('./stateUpdateHandler');
 
 // Handlers
@@ -7,16 +8,29 @@ const generateQuestion = require('../interview/generateQuestion');
 const processUserInput = require('../interview/processUserInput');
 const terminateSession = require('../interview/terminateSession');
 const { synthesizeToBase64Chunks } = require('../../lib/polly');
-const { invokeModelStream, buildResumeQuestionPrompt, buildHRQuestionPrompt, buildWebsiteTeachPrompt } = require('../../lib/bedrock');
+const { invokeModelStream, buildInterviewPrompt, buildTutorPrompt } = require('../../lib/bedrock');
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
-const { getTranscriptBySession } = require('../../models/transcript');
 
 
-// Voice Mapping
+// Voice Mapping - Maps UI voice names to Polly VoiceIds
+// Generative engine supports: Tiffany, Gregory, Patrick, Kevin, Matthew, Justin, Joey, Stephen, Ivy
+// and female voices: Danielle, Joanna, Ruth, Salli, Kimberly, Kendra
 const VOICE_MAP = {
-    'Tiffany': 'Ruth',
-    'Matthew': 'Matthew'
+    'Tiffany': 'Tiffany',
+    'Matthew': 'Matthew',
+    'Gregory': 'Gregory',
+    'Ivy': 'Ivy',
+    'Joanna': 'Joanna',
+    'Kendra': 'Kendra',
+    'Kimberly': 'Kimberly',
+    'Salli': 'Salli',
+    'Joey': 'Joey',
+    'Justin': 'Justin',
+    'Kevin': 'Kevin',
+    'Patrick': 'Patrick',
+    'Stephen': 'Stephen',
+    'Ruth': 'Ruth'
 };
 
 /**
@@ -65,7 +79,7 @@ exports.handler = async (event) => {
  * 4. Pushes results to WebSocket connection
  */
 async function streamAIResponse(connectionId, sessionId, session, moduleType, prompt) {
-    const pollyVoice = VOICE_MAP[session.voiceId || 'Tiffany'] || 'Ruth';
+    const pollyVoice = VOICE_MAP[session.voiceId || 'Tiffany'] || 'Tiffany';
     let fullText = "";
     let sentenceBuffer = "";
     let globalAudioChunkIndex = 0;
@@ -82,33 +96,50 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
     let lastProcessPromise = Promise.resolve();
 
     const processSentence = async (sentence) => {
-        // CLEANUP: Strip common JSON markers if the model accidentally includes them
-        let cleanSentence = sentence
-            .replace(/\{"question":\s*"/g, '')
-            .replace(/\{"response":\s*"/g, '')
-            .replace(/"\}/g, '')
-            .replace(/\\"/g, '"') // Unescape quotes
-            .trim();
+        let cleanSentence = sentence;
+        try {
+            const parsed = JSON.parse(sentence);
+            if (parsed.question) cleanSentence = parsed.question;
+            else if (parsed.response) cleanSentence = parsed.response;
+        } catch (e) {
+            // Fallback to regex for non-JSON responses
+            cleanSentence = sentence
+                .replace(/^\s*\{\s*"(question|response)"\s*:\s*"/, '')
+                .replace(/"\s*\}\s*$/, '')
+                .replace(/\\"/g, '"')
+                .trim();
+        }
 
         if (!cleanSentence) return;
-        
-        // Use a sequential chain to ensure sentences are synthesized and sent IN ORDER
+
         lastProcessPromise = lastProcessPromise.then(async () => {
             try {
-                for await (const audioChunk of synthesizeToBase64Chunks(cleanSentence, { VoiceId: pollyVoice })) {
+                const engine = session.itemData?.engine || 'generative';
+                for await (const audioChunk of synthesizeToBase64Chunks(cleanSentence, { VoiceId: pollyVoice, Engine: engine })) {
                     await postToConnection(connectionId, {
-                        type: 'audio_chunk',
-                        chunkIndex: globalAudioChunkIndex++,
-                        audioData: audioChunk.audioData,
-                        isLast: false
+                        type: 'tts_audio_chunk',
+                        payload: {
+                            chunkIndex: globalAudioChunkIndex++,
+                            audioData: audioChunk.audioData,
+                            isLast: false
+                        }
                     });
                 }
             } catch (err) {
-                console.error('Sentence processing failed in background:', err);
-                // We don't rethrow here to avoid breaking the entire stream chain, 
-                // but the error is now caught and logged.
+                console.error('Sentence processing failed:', err);
+                // Notify frontend that audio synthesis failed for this sentence
+                await postToConnection(connectionId, {
+                    type: 'error',
+                    payload: {
+                        message: 'Audio synthesis failed: ' + err.message,
+                        code: 'TTS_ERROR'
+                    }
+                });
+                // Re-throw so the outer streamAIResponse catch can handle it
+                throw err;
             }
         });
+        return lastProcessPromise;
     };
 
     try {
@@ -117,24 +148,33 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
         // Notify client that AI is preparing to speak
         await postToConnection(connectionId, {
             type: 'session_text_stream',
-            text: "", 
-            status: "thinking"
+            payload: { text: "", status: "thinking" }
         });
 
         // LATENCY HIDING: If this is the start of the session, send an immediate intro
         // while Bedrock is generating the first question.
         if (session.turnCount === 0) {
+            // Get the voice name from the session (e.g., "Tiffany", "Matthew", "Joanna")
+            const voiceName = session.voiceId || 'Tiffany';
+            
             const intros = {
-                'RESUME': "Hello! <break time='300ms'/> I'm Tiffany. I've analyzed your resume, and I'm ready to start your technical interview. <break time='200ms'/> Let's begin.",
-                'WEBSITE': "Hi there! <break time='300ms'/> I'm your mentor. I've reviewed the website content you provided, and I'm excited to help you learn. <break time='200ms'/> Here's my first question.",
-                'HR': "Hello! <break time='300ms'/> I'm Tiffany from the recruiting team. I'll be conducting your behavioral interview today. <break time='200ms'/> Let's get started."
+                'RESUME': `Hello! I'm ${voiceName}. I've analyzed your resume, and I'm ready to start your technical interview. Let's begin.`,
+                'WEBSITE': `Hi there! I'm ${voiceName}, your mentor. I've reviewed the website content you provided, and I'm excited to help you learn. Here's my first question.`,
+                'HR': `Hello! I'm ${voiceName} from the recruiting team. I'll be conducting your behavioral interview today. Let's get started.`,
+                'INTRO': `Hello! I'm ${voiceName}, your AI interviewer. Let's work on perfecting your self-introduction and elevator pitch. Ready when you are!`, // ADD
             };
-            const introText = intros[moduleType] || "Hello! <break time='300ms'/> I'm Tiffany, your AI interviewer. Let's begin our session.";
+            
+            const introText = intros[moduleType] || `Hello! I'm ${voiceName}, your AI interviewer. Let's begin our session.`;
+            
+            // FIX: Add intro to the text buffer so frontend sees the complete message
+            fullText += introText + " ";
+            sentenceBuffer += introText + " ";
+
             console.debug(`[Stream] Sending instant intro to hide latency.`);
-            processSentence(introText);
+            await processSentence(introText);
         }
 
-        await invokeModelStream(undefined, { messages: prompt }, async (token) => {
+        await invokeModelStream(undefined, prompt, async (token) => {
             fullText += token;
             sentenceBuffer += token;
 
@@ -148,14 +188,14 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
                 const sentenceToProcess = sentenceBuffer;
                 sentenceBuffer = ""; 
                 console.debug(`[Stream] Boundary detected, processing fragment: "${sentenceToProcess.substring(0, 30)}..."`);
-                processSentence(sentenceToProcess);
+                await processSentence(sentenceToProcess);
             }
 
             if (!textRefreshTimer) {
                 textRefreshTimer = setTimeout(() => {
                     postToConnection(connectionId, {
                         type: 'session_text_stream',
-                        text: fullText
+                        payload: { text: fullText }
                     });
                     textRefreshTimer = null;
                 }, 200);
@@ -171,12 +211,37 @@ async function streamAIResponse(connectionId, sessionId, session, moduleType, pr
 
         console.info(`[Stream] Awaiting final background synthesis...`);
         await lastProcessPromise;
-        
+
+        // Send the final question text as a state update so frontend persists it
+        await postToConnection(connectionId, {
+            type: 'session_state_update',
+            payload: {
+                sessionId,
+                previousState: 'AI_SPEAKING',
+                state: 'AI_SPEAKING',
+                turnIndex: session.turnCount,
+                questionText: fullText,
+                timestamp: Date.now()
+            }
+        });
+
         // FINAL SIGNAL: Send an empty chunk with isLast:true to signal completion
         await postToConnection(connectionId, {
-            type: 'audio_chunk',
-            audioData: '',
-            isLast: true
+            type: 'tts_audio_chunk',
+            payload: {
+                audioData: '',
+                isLast: true
+            }
+        });
+
+        await postToConnection(connectionId, {
+            type: 'ai_speaking_complete',
+            payload: { sessionId, turnIndex: session.turnCount }
+        });
+
+        // Persist the actual generated text to DynamoDB
+        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
+            questionText: fullText,
         });
 
         console.info(`[Stream] Sequential processing complete.`);
@@ -209,28 +274,43 @@ async function handleSessionInit(connectionId, body) {
     const session = await getSession(sessionId);
     if (!session) throw new Error('Session not found');
 
+    if (moduleType && session.moduleType !== moduleType) {
+        await postToConnection(connectionId, {
+            type: 'error',
+            payload: { message: 'MODULE_MISMATCH', code: 'MODULE_MISMATCH' }
+        });
+        throw new Error('MODULE_MISMATCH');
+    }
+
     const userId = session.userId;
     const transcripts = await getTranscriptBySession(sessionId);
     const history = transcripts.map(t => ({
         role: t.speaker === 'USER' ? 'user' : 'assistant',
-        content: t.text
+        content: [{ text: t.text }]
     }));
 
     // Build Prompt
     let prompt = [];
-    if (session.moduleType === 'RESUME') {
-        let resumeId = session.itemData?.resumeId;
-        if (!resumeId) {
-            const user = await getUserById(userId);
-            resumeId = user.activeResumeId;
-        }
-        const resume = await getResumeById(resumeId);
-        prompt = buildResumeQuestionPrompt(resume?.parsedData, history, 0);
-    } else if (session.moduleType === 'WEBSITE') {
-        prompt = buildWebsiteTeachPrompt(session.itemData?.websiteUrl, "", history, false);
+    if (session.moduleType === 'WEBSITE') {
+        prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, "");
     } else {
-        prompt = buildHRQuestionPrompt("Professional Background", history);
+        let context = "Professional Background";
+        if (session.moduleType === 'RESUME') {
+            let resumeId = session.itemData?.resumeId;
+            if (!resumeId) {
+                const user = await getUserById(userId);
+                resumeId = user.activeResumeId;
+            }
+            const resume = await getResumeById(resumeId);
+            context = resume?.parsedData || context;
+        }
+        prompt = buildInterviewPrompt(context, history, 0, session.moduleType);
     }
+
+    // FIX: Transition state in DB before streaming
+    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.INITIALIZING, {
+        turnCount: session.turnCount || 0
+    });
 
     // Push state update to transition UI
     await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.INITIALIZING, INTERVIEW_STATES.AI_SPEAKING, 0, "...");
@@ -238,55 +318,163 @@ async function handleSessionInit(connectionId, body) {
     // Stream the response
     await streamAIResponse(connectionId, sessionId, session, session.moduleType, prompt);
 
+    // Transition to USER_RESPONDING so the user can speak
+    await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING);
+    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, 0, "Your turn to respond.");
+
     return { statusCode: 200 };
 }
 
 async function handleTextTranscript(connectionId, body) {
-    const { sessionId, text } = body.payload || {};
+  const { sessionId, text } = body.payload || {};
 
-    if (!sessionId || !text) throw new Error('Missing sessionId or text');
+  if (!sessionId || !text) throw new Error('Missing sessionId or text');
 
-    // 1. Process user input (non-streaming parts: scoring, etc)
-    // We call the existing handler but we'll ignore its question generation part 
-    // or we'll refactor it to just do scoring.
-    // For now, let's just do it here to be fast.
-    const session = await getSession(sessionId);
-    const transcripts = await getTranscriptBySession(sessionId);
-    const history = transcripts.map(t => ({
-        role: t.speaker === 'USER' ? 'user' : 'assistant',
-        content: t.text
-    }));
-    history.push({ role: 'user', content: text });
+  const session = await getSession(sessionId);
+  if (!session) throw new Error('Session not found');
 
-    // 2. Build Next Question Prompt
-    let prompt = [];
-    if (session.moduleType === 'RESUME') {
-        let resumeId = session.itemData?.resumeId;
-        if (!resumeId) {
-            const user = await getUserById(session.userId);
-            resumeId = user.activeResumeId;
-        }
-        const resume = await getResumeById(resumeId);
-        prompt = buildResumeQuestionPrompt(resume?.parsedData, history, session.turnCount + 1);
-    } else if (session.moduleType === 'WEBSITE') {
-        prompt = buildWebsiteTeachPrompt("", "", history, true);
-    } else {
-        prompt = buildHRQuestionPrompt("Professional Background", history);
-    }
 
-    // 3. Stream the response
-    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, session.turnCount + 1, "...");
+
+  // 1. Save user transcript (moved to processUserInput, but keeping here for legacy if needed, 
+  // actually processUserInput also saves it, so we can remove it from here to avoid double save)
+  // await saveTranscript(sessionId, session.turnCount || 0, SPEAKERS.USER, text);
+
+  // 2. Call business logic (NO state transition here)
+  const processRes = await processUserInput.handler({ 
+    body: JSON.stringify({ 
+      sessionId, 
+      textTranscript: text 
+    }) 
+  });
+
+  // 3. Handle failure gracefully
+  if (processRes.statusCode !== 200) {
+    const errorBody = JSON.parse(processRes.body);
+    // Push error to client
+    await postToConnection(connectionId, { 
+      type: 'error', 
+      payload: { message: errorBody.error || 'Processing failed' } 
+    });
+    return { statusCode: 200 }; // Handled
+  }
+
+  // 4. Extract data safely
+  const processBody = JSON.parse(processRes.body);
+  const data = processBody.data || processBody; 
+  const nextAIResponse = data.nextAIResponse;
+  const onlyQuestion = data.onlyQuestion || nextAIResponse;
+
+  // Refresh session from DB to get the most up-to-date state (turnCount, scores)
+  const updatedSession = await getSession(sessionId);
+
+  // 4. Handle pre-generated responses (silence retry, deadlock recovery)
+  if (data.silenceRetries || data.message?.includes('Deadlock') || data.message?.includes('Silence')) {
+    await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, nextAIResponse);
     
-    await streamAIResponse(connectionId, sessionId, session, session.moduleType, prompt);
-
+    await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING);
+    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
+    
     return { statusCode: 200 };
+  }
+
+  // Only require nextAIResponse for WEBSITE/INTRO modes where processUserInput generates it
+  if (session.moduleType !== 'RESUME' && session.moduleType !== 'HR' && !nextAIResponse) {
+    throw new Error('No AI response generated');
+  }
+
+  // 5. Build prompt for streaming
+  // We need to rebuild history AFTER processUserInput saved the new transcript
+  const transcripts = await getTranscriptBySession(sessionId);
+  const history = transcripts.map(t => ({
+    role: t.speaker === 'USER' ? 'user' : 'assistant',
+    content: [{ text: t.text }]
+  }));
+
+  let prompt = [];
+  if (session.moduleType === 'WEBSITE') {
+    prompt = buildTutorPrompt(session.itemData?.websiteUrl, history, text);
+  } else {
+    let context = "Professional Background";
+    if (session.moduleType === 'RESUME') {
+      let resumeId = session.itemData?.resumeId;
+      if (!resumeId) {
+        const user = await getUserById(session.userId);
+        resumeId = user.activeResumeId;
+      }
+      const resume = await getResumeById(resumeId);
+      context = resume?.parsedData || context;
+    }
+    prompt = buildInterviewPrompt(context, history, session.turnCount + 1, session.moduleType);
+  }
+
+  // 6. Push state and stream response
+  // Note: processUserInput already advanced the state in DB to AI_SPEAKING or similar
+  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is generating next question.");
+
+  await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
+
+  await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING);
+  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
+
+  return { statusCode: 200 };
+}
+
+/**
+ * Helper to stream pre-generated text (silence retries, etc) via TTS without Bedrock
+ */
+async function streamPreGeneratedResponse(connectionId, sessionId, session, text) {
+    const pollyVoice = VOICE_MAP[session.voiceId || 'Tiffany'] || 'Tiffany';
+    const engine = session.itemData?.engine || 'generative';
+    
+    // Stream text
+    await postToConnection(connectionId, {
+      type: 'session_text_stream',
+      payload: { text }
+    });
+    
+    // Synthesize TTS
+    let chunkIndex = 0;
+    for await (const audioChunk of synthesizeToBase64Chunks(text, { VoiceId: pollyVoice, Engine: engine })) {
+      await postToConnection(connectionId, {
+        type: 'tts_audio_chunk',
+        payload: { chunkIndex: chunkIndex++, audioData: audioChunk.audioData, isLast: false }
+      });
+    }
+    
+    // Final signals
+    await postToConnection(connectionId, {
+      type: 'tts_audio_chunk',
+      payload: { audioData: '', isLast: true }
+    });
+    
+    await postToConnection(connectionId, {
+      type: 'ai_speaking_complete',
+      payload: { sessionId, turnIndex: session.turnCount }
+    });
+    
+    await postToConnection(connectionId, {
+      type: 'session_state_update',
+      payload: {
+        sessionId,
+        previousState: 'AI_SPEAKING',
+        state: 'AI_SPEAKING',
+        turnIndex: session.turnCount,
+        questionText: text,
+        timestamp: Date.now()
+      }
+    });
+
+    // Persist the pre-generated text to DynamoDB
+    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
+        questionText: text,
+    });
 }
 
 
 async function handleTerminateSession(connectionId, body) {
     const { sessionId } = body.payload || {};
     await terminateSession.handler({
-        body: JSON.stringify({ sessionId, reason: 'USER_TERMINATED' })
+        body: JSON.stringify({ sessionId, reason: 'USER_INITIATED' })
     });
     
     await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });

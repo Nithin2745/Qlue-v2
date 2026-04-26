@@ -56,7 +56,7 @@ async function* synthesizeToBase64Chunks(text, options = {}) {
   if (!voiceId) {
     throw new Error('Voice ID must be provided by the user');
   }
-  const engine = options.Engine || 'neural';
+  const engine = options.Engine || 'generative';
   
   // Polly has a 3000 character limit for regular text. 
   // We handle TextLengthExceededException proactively by chunking.
@@ -66,13 +66,16 @@ async function* synthesizeToBase64Chunks(text, options = {}) {
   for (let t = 0; t < textChunks.length; t++) {
     const chunkText = textChunks[t];
     
+    // Build SSML text with prosody and breathing for natural speech
+    const ssmlText = buildEnhancedSSML(chunkText);
+
     const command = new SynthesizeSpeechCommand({
       Engine: engine,
       VoiceId: voiceId,
       OutputFormat: 'mp3',
-      Text: `<speak>${chunkText}</speak>`,
+      Text: ssmlText,
       TextType: 'ssml',
-      SampleRate: '22050' // standard for neural mp3
+      SampleRate: '24000' // generative engine supports higher quality
     });
 
     try {
@@ -119,7 +122,47 @@ async function* synthesizeToBase64Chunks(text, options = {}) {
 }
 
 
+/**
+ * Builds enhanced SSML markup for more natural and human-like speech.
+ * - Adds subtle prosody variations to avoid monotone delivery
+ * - Inserts micro-pauses at natural speech boundaries (commas, periods)
+ * - Adds breathing pauses before long sentences
+ * - Uses amazon:effect for breath sounds where supported
+ */
+function buildEnhancedSSML(text) {
+  // If already wrapped in <speak>, return as-is
+  if (text.trim().startsWith('<speak>')) return text;
+
+  // Remove any existing <speak> or </speak> fragments to avoid nesting
+  let cleanText = text.replace(/<\/?speak>/g, '').trim();
+
+  // Escape XML special characters (&, <, >) — MUST do this first before adding tags
+  cleanText = cleanText
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Add micro-pauses after punctuation for natural rhythm
+  cleanText = cleanText
+    .replace(/:\s+/g, '<break time="200ms"/> ')
+    .replace(/;\s+/g, '<break time="150ms"/> ')
+    .replace(/,\s+/g, '<break time="100ms"/> ');
+
+  // Add pause before question marks
+  cleanText = cleanText.replace(/\?\s*/g, '<break time="200ms"/>? ');
+
+  // Add breath pause before conjunctions at sentence start
+  cleanText = cleanText.replace(
+    /(^|\.\s+)(And|But|So|Now|Well|OK|Okay|Right|Actually|However|Therefore|Meanwhile)\b/g,
+    '$1<break time="300ms"/> $2'
+  );
+
+  // Simple <speak> wrapper — NO <prosody> (Generative engine handles prosody naturally)
+  return '<speak>' + cleanText + '</speak>';
+}
+
 module.exports = {
   getEstimatedDuration,
-  synthesizeToBase64Chunks
+  synthesizeToBase64Chunks,
+  buildEnhancedSSML
 };
