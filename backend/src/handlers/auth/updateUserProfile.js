@@ -1,6 +1,4 @@
-const { update } = require('../../lib/dynamodb');
-
-const USERS_TABLE = process.env.USERS_TABLE || 'qlue-users';
+const { updateUserProfile } = require('../../models/user');
 
 /**
  * AWS Lambda Handler: PUT /auth/profile
@@ -20,7 +18,14 @@ exports.handler = async (event) => {
         const body = JSON.parse(event.body || '{}');
         const { displayName, photoUrl, profession, skills, voiceId } = body;
 
-        if (displayName === undefined && photoUrl === undefined && profession === undefined && skills === undefined && voiceId === undefined) {
+        const updates = {};
+        if (displayName !== undefined) updates.displayName = displayName;
+        if (photoUrl !== undefined) updates.photoUrl = photoUrl;
+        if (profession !== undefined) updates.profession = profession;
+        if (skills !== undefined) updates.skills = skills;
+        if (voiceId !== undefined) updates.voiceId = voiceId;
+
+        if (Object.keys(updates).length === 0) {
             return {
                 statusCode: 400,
                 body: JSON.stringify({ error: 'NO_UPDATE_FIELDS', message: 'Provide fields to update' })
@@ -34,55 +39,13 @@ exports.handler = async (event) => {
             };
         }
 
-        let updateExpression = 'SET updatedAt = :updatedAt';
-        const expressionAttributeValues = {
-            ':updatedAt': new Date().toISOString()
-        };
-
-        if (displayName !== undefined) {
-            updateExpression += ', displayName = :displayName';
-            expressionAttributeValues[':displayName'] = displayName;
-        }
-
-        if (photoUrl !== undefined) {
-            updateExpression += ', photoUrl = :photoUrl';
-            expressionAttributeValues[':photoUrl'] = photoUrl;
-        }
-
-        if (profession !== undefined) {
-            updateExpression += ', profession = :profession';
-            expressionAttributeValues[':profession'] = profession;
-        }
-
-        if (skills !== undefined) {
-            updateExpression += ', skills = :skills';
-            expressionAttributeValues[':skills'] = skills;
-        }
-
-        if (voiceId !== undefined) {
-            updateExpression += ', voiceId = :voiceId';
-            expressionAttributeValues[':voiceId'] = voiceId;
-        }
-
-        const result = await update(
-            USERS_TABLE,
-            { userId },
-            updateExpression,
-            expressionAttributeValues
-        );
-
-        if (!result.success) {
-            return {
-                statusCode: result.error?.name === 'ConditionalCheckFailedException' ? 404 : 500,
-                body: JSON.stringify({ error: 'UPDATE_FAILED', details: result.error?.message })
-            };
-        }
+        const updatedUser = await updateUserProfile(userId, updates);
 
         return {
             statusCode: 200,
             body: JSON.stringify({
                 message: 'Profile updated successfully',
-                user: result.data
+                user: updatedUser
             })
         };
 

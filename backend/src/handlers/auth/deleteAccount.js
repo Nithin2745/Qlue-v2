@@ -2,7 +2,7 @@ const firebase = require('../../lib/firebase');
 const { delete: remove, query } = require('../../lib/dynamodb');
 const { deleteResumeRecord, getResumesByUserId } = require('../../models/resume');
 
-const USERS_TABLE = process.env.USERS_TABLE || 'qlue-users';
+const USERS_TABLE = process.env.USERS_TABLE;
 
 /**
  * AWS Lambda Handler: DELETE /auth/account

@@ -1,6 +1,6 @@
 const { update } = require('../../lib/dynamodb');
 
-const USERS_TABLE = process.env.USERS_TABLE || 'qlue-users';
+const USERS_TABLE = process.env.USERS_TABLE;
 
 /**
  * AWS Lambda Handler: POST /auth/fcm-token
