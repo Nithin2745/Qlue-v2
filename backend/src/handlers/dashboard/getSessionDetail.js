@@ -4,8 +4,7 @@ const { DynamoDBDocumentClient, GetCommand, QueryCommand } = require("@aws-sdk/l
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
-const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'qlue-sessions';
-const FEEDBACK_TABLE = process.env.FEEDBACK_TABLE || 'qlue-feedback';
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'qlue-core-v2';
 
 /**
  * AWS Lambda Handler: GET /dashboard/session/{sessionId}
@@ -29,12 +28,15 @@ exports.handler = async (event) => {
         }
 
         // 1. Get Session
-        const sessionCmd = new GetCommand({
+        const sessionCmd = new QueryCommand({
             TableName: SESSIONS_TABLE,
-            Key: { sessionId }
+            IndexName: 'SessionIdIndex',
+            KeyConditionExpression: 'sessionId = :sid',
+            ExpressionAttributeValues: { ':sid': sessionId },
+            Limit: 1
         });
         const sessionRes = await docClient.send(sessionCmd);
-        const session = sessionRes.Item;
+        const session = sessionRes.Items?.[0];
 
         if (!session || session.userId !== userId) {
             return {
@@ -43,24 +45,11 @@ exports.handler = async (event) => {
             };
         }
 
-        // 2. Get Associated Feedback (if any)
-        const feedbackCmd = new QueryCommand({
-            TableName: FEEDBACK_TABLE,
-            IndexName: 'GSI_SessionId',
-            KeyConditionExpression: 'sessionId = :sid',
-            ExpressionAttributeValues: {
-                ':sid': sessionId
-            },
-            Limit: 1
-        });
-        const feedbackRes = await docClient.send(feedbackCmd);
-        const feedback = feedbackRes.Items?.[0] || null;
-
         return {
             statusCode: 200,
             body: JSON.stringify({
                 session,
-                feedback
+                feedback: session.feedback || null
             })
         };
 

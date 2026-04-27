@@ -4,7 +4,7 @@ const { DynamoDBDocumentClient, QueryCommand } = require("@aws-sdk/lib-dynamodb"
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
-const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'qlue-sessions';
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'qlue-core-v2';
 
 /**
  * AWS Lambda Handler: GET /dashboard/history
@@ -23,7 +23,7 @@ exports.handler = async (event) => {
 
         const params = {
             TableName: SESSIONS_TABLE,
-            IndexName: 'GSI_UserIdStartedAt',
+            IndexName: 'UserSessionTimeIndex',
             KeyConditionExpression: 'userId = :uid',
             ExpressionAttributeValues: {
                 ':uid': userId
@@ -37,11 +37,13 @@ exports.handler = async (event) => {
             params.ExpressionAttributeValues[':mt'] = moduleType;
         }
 
-        if (lastSessionId && lastStartedAt) {
+        const { lastSessionKey } = event.queryStringParameters || {};
+        if (lastSessionKey && lastStartedAt) {
             params.ExclusiveStartKey = {
+                PK: `USER#${userId}`,
+                SK: lastSessionKey,
                 userId: userId,
-                sessionId: lastSessionId,
-                startedAt: parseInt(lastStartedAt)
+                startedAt: lastStartedAt
             };
         }
 
