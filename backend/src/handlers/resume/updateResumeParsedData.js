@@ -2,7 +2,7 @@ const { getResumeById, updateResumeParsingResult } = require('../../models/resum
 const { update } = require('../../lib/dynamodb');
 const { success, unauthorized, badRequest, notFound, internalError } = require('../../lib/response');
 
-const RESUMES_TABLE = process.env.RESUMES_TABLE || 'qlue-resumes';
+const RESUMES_TABLE = process.env.RESUMES_TABLE;
 
 /**
  * AWS Lambda Handler: PATCH /resume/{resumeId}/data
@@ -41,7 +41,7 @@ exports.handler = async (event) => {
             ...updates
         };
 
-        const result = await updateResumeParsingResult(resumeId, 'PARSED', newParsedData);
+        const result = await updateResumeParsingResult(userId, resume.resumeKey, 'PARSED', newParsedData);
 
         if (!result.success) {
             return internalError(result.error?.message, 'UPDATE_FAILED');

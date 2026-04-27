@@ -1,9 +1,6 @@
-const { getResumeById, getResumesByUserId } = require('../../models/resume');
+const { toggleActiveStatus } = require('../../models/resume');
 const { setActiveResumeId } = require('../../models/user');
-const { update } = require('../../lib/dynamodb');
-const { success, unauthorized, badRequest, notFound, internalError } = require('../../lib/response');
-
-const RESUMES_TABLE = process.env.RESUMES_TABLE || 'qlue-resumes';
+const { success, unauthorized, badRequest, internalError } = require('../../lib/response');
 
 /**
  * AWS Lambda Handler: POST /resume/active
@@ -23,24 +20,10 @@ exports.handler = async (event) => {
             return badRequest('resumeId is required');
         }
 
-        // 1. Verify existence and ownership
-        const targetResume = await getResumeById(resumeId);
-        if (!targetResume || targetResume.userId !== userId) {
-            return notFound('Resume not found');
-        }
+        // 1. Toggle active status across all user resumes (V2 optimized)
+        await toggleActiveStatus(userId, resumeId);
 
-        // 2. Update status across all resumes for this user
-        const resumes = await getResumesByUserId(userId);
-        const updatePromises = resumes.map(r => {
-            const shouldBeActive = r.resumeId === resumeId;
-            if (r.isActive !== shouldBeActive) {
-                return update(RESUMES_TABLE, { resumeId: r.resumeId }, 'SET isActive = :ia', { ':ia': shouldBeActive });
-            }
-        }).filter(Boolean);
-
-        await Promise.all(updatePromises);
-
-        // 3. Update the User profile record
+        // 2. Update the User profile record (V2)
         await setActiveResumeId(userId, resumeId);
 
         return success({ message: 'Active resume updated successfully' });

@@ -11,7 +11,7 @@ const { setActiveResumeId } = require('../../models/user');
 const { success, badRequest, notFound, internalError, unauthorized } = require('../../lib/response');
 
 const lambdaClient = new LambdaClient({});
-const RESUMES_TABLE = process.env.RESUMES_TABLE || 'qlue-resumes';
+const RESUMES_TABLE = process.env.RESUMES_TABLE;
 const BUCKET_NAME = process.env.RESUMES_BUCKET || 'qlue-resumes';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
