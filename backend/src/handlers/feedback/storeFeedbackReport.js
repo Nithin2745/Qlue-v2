@@ -13,7 +13,7 @@ exports.handler = async (event) => {
   try {
     console.info(`Storing feedback report for user ${userId}, session ${sessionId}`);
 
-    // 1. Store the feedback report in DynamoDB
+    // 1. Store the feedback report directly on the session item in DynamoDB
     const result = await createFeedbackReport(event);
     
     if (!result.success) {
