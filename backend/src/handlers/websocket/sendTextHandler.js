@@ -403,10 +403,18 @@ async function handleTextTranscript(connectionId, body) {
   // 3. Handle failure gracefully
   if (processRes.statusCode !== 200) {
     const errorBody = JSON.parse(processRes.body);
-    // Push error to client
+    const errMsg = errorBody.error || errorBody.message || 'Processing failed';
+    
+    // FIX: Suppress double-submit / race-condition errors so they don't kill the active UI
+    if (processRes.statusCode === 409 || errMsg.includes('transition') || errMsg.includes('state')) {
+      console.warn(`[Double-Submit Guard] Suppressed error to UI: ${errMsg}`);
+      return { statusCode: 200 }; 
+    }
+
+    // Push actual fatal errors to client
     await postToConnection(connectionId, { 
       type: 'error', 
-      payload: { message: errorBody.error || 'Processing failed' } 
+      payload: { message: errMsg } 
     });
     return { statusCode: 200 }; // Handled
   }
