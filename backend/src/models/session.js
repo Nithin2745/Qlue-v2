@@ -99,6 +99,15 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         expressionAttributeValues[":turnCount"] = updates.turnCount;
     }
 
+    if (updates.expectedTurnCount !== undefined) {
+        if (conditionExpression) {
+            conditionExpression += " AND turnCount = :expectedTurnCount";
+        } else {
+            conditionExpression = "turnCount = :expectedTurnCount";
+        }
+        expressionAttributeValues[":expectedTurnCount"] = updates.expectedTurnCount;
+    }
+
     updateExpression += ", updatedAt = :updatedAt";
     expressionAttributeValues[":updatedAt"] = new Date().toISOString();
     

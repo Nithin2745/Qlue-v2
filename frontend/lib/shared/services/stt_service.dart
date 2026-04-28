@@ -10,6 +10,7 @@ class SttService {
   final SpeechToText _speech = SpeechToText();
   bool _isInitialized = false;
   bool _isInitializing = false;
+  Function(String)? onStatusChange;
 
   Future<bool> init() async {
     if (_isInitialized) return true;
@@ -26,6 +27,9 @@ class SttService {
         },
         onStatus: (status) {
           debugPrint('STT Status: $status');
+          if (onStatusChange != null) {
+            onStatusChange!(status);
+          }
         },
         debugLogging: kDebugMode,
       );

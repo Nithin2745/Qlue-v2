@@ -34,11 +34,19 @@ exports.handler = async (event) => {
 
         const currentConceptId = body.currentConceptId || session.currentConceptId;
 
+        if (session.currentState === INTERVIEW_STATES.AI_SPEAKING || session.currentState === 'SYNTHESIZING_AUDIO') {
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ success: true, message: 'Input ignored: AI is speaking' })
+            };
+        }
+
         // [Mouli Week 4: Deadlock Recovery]
         if (session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE) {
             const deadlockTime = Date.now() - new Date(session.updatedAt || session.startTime).getTime();
             if (deadlockTime > 60 * 1000) {
                 // Recover the session silently
+                await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.PROCESSING_RESPONSE, { message: 'Recovered from Deadlock.' });
                 return {
                     statusCode: 200,
                     body: JSON.stringify({
@@ -59,7 +67,16 @@ exports.handler = async (event) => {
         }
 
         // --- 0. INITIAL TRANSITION ---
-        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
+        if (session.currentState !== INTERVIEW_STATES.PROCESSING_RESPONSE) {
+            try {
+                await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, session.currentState, { expectedTurnCount: session.turnCount });
+            } catch (err) {
+                if (err.name === 'ConditionalCheckFailedException') {
+                    return { statusCode: 409, body: JSON.stringify({ success: false, message: 'Conflict: Turn already processing' }) };
+                }
+                throw err;
+            }
+        }
 
         // --- 1. SILENCE NEGOTIATION W/ RETRIES ---
         if (isSilence) {
@@ -215,7 +232,9 @@ exports.handler = async (event) => {
             accumulatedScores: newAccumulated 
         };
         // Bug 7: Only include currentConceptId when truthy
-        if (targetConcept) updates.currentConceptId = targetConcept;
+        if (targetConcept) {
+            updates.currentConceptId = targetConcept;
+        }
 
         await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, updates); 
 

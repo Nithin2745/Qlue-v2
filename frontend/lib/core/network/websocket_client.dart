@@ -100,7 +100,12 @@ class WebSocketClient {
 
   void send(String type, Map<String, dynamic> payload) {
     if (_status == WebSocketStatus.connected && _channel != null) {
-      _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
+      try {
+        _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
+      } catch (e) {
+        debugPrint('WebSocket: Send error: $e');
+        _handleDisconnect();
+      }
     }
   }
 

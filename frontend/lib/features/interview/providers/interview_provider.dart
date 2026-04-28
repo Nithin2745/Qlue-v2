@@ -253,6 +253,7 @@ class InterviewProvider extends ChangeNotifier {
         errorMessage = payload['message'];
         isStreamingText = false;
         currentPhase = InterviewPhase.ready; // FIX: reset phase on error
+        _ttsService.stop();
         notifyListeners();
         break;
     }
@@ -344,7 +345,19 @@ class InterviewProvider extends ChangeNotifier {
     try {
       errorMessage = null; // Clear previous errors
       isListening = true;
+      partialTranscript = "";
+      finalTranscript = "";
       _resetSilenceTimer();
+      
+      _sttService.onStatusChange = (status) {
+        if (status == 'done' || status == 'notListening') {
+          if (isListening) {
+             debugPrint('STT native stop detected. Syncing state...');
+             isListening = false;
+             notifyListeners();
+          }
+        }
+      };
       
       // FIX: Ensure STT is ready
       final ready = await _sttService.init();

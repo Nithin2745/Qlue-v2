@@ -87,22 +87,19 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
     });
 
     try {
-        const response = await bedrockClient.send(command);
-        let fullText = "";
-        let isTimedOut = false;
-        
+        const abortController = new AbortController();
         let timeoutTimer = setTimeout(() => {
-            isTimedOut = true;
+            abortController.abort();
         }, 15000);
 
+        const response = await bedrockClient.send(command, { abortSignal: abortController.signal });
+        let fullText = "";
+
         for await (const event of response.stream) {
-            if (isTimedOut) {
-                throw new Error("BEDROCK_TIMEOUT");
-            }
             // Reset timer on token received
             clearTimeout(timeoutTimer);
             timeoutTimer = setTimeout(() => {
-                isTimedOut = true;
+                abortController.abort();
             }, 15000);
 
             if (event.contentBlockDelta) {
@@ -115,7 +112,7 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
         return fullText;
     } catch (error) {
         console.error('Bedrock Streaming Error:', error);
-        if (error.message === 'BEDROCK_TIMEOUT' || error.name === 'TimeoutError') {
+        if (error.name === 'AbortError' || error.message === 'BEDROCK_TIMEOUT' || error.name === 'TimeoutError') {
             throw new QlueError('Bedrock stream timed out after 15 seconds of inactivity.', 'BEDROCK_TIMEOUT', 504, error.message);
         }
         throw new QlueError('Bedrock Streaming Error', 'BEDROCK_ERROR', 500, error.message);
