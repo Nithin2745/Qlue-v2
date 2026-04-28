@@ -385,13 +385,9 @@ async function handleTextTranscript(connectionId, body) {
 
   // FIX 3: Defense: Reject if AI is still speaking (race condition protection)
   if (session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
-    await postToConnection(connectionId, {
-      type: 'error',
-      payload: { 
-        message: 'Please wait for the AI to finish speaking.',
-        code: 'AI_STILL_SPEAKING'
-      }
-    });
+    console.warn(`[Barge-In] Ignored transcript from session ${sessionId} as AI is speaking.`);
+    // Silently drop the transcript to enforce professional interview dynamics.
+    // Do NOT send a type: 'error' to the frontend, as it will kill the active TTS stream.
     return { statusCode: 200 };
   }
 
