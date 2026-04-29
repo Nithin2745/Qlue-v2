@@ -29,7 +29,7 @@ class TtsService {
         final bytes = base64Decode(base64Data);
         
         if (_audioStreamController == null || _audioStreamController!.isClosed) {
-          _audioStreamController = StreamController<List<int>>.broadcast();
+          _audioStreamController = StreamController<List<int>>();
           _startPlayback();
         }
         

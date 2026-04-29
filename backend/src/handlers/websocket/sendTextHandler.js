@@ -644,6 +644,11 @@ async function handleSessionReconnect(connectionId, body) {
         // no TTS audio will play and onPlaybackComplete will never fire.
         // Send an empty isLast chunk to unblock the TTS service.
         if (session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
+            const now = Date.now();
+            const lastUpdate = session.updatedAt ? new Date(session.updatedAt).getTime() : now;
+            const diffSeconds = (now - lastUpdate) / 1000;
+            
+            if (diffSeconds > 20) {
             // Send whatever question text we have
             if (session.questionText) {
                 await postToConnection(connectionId, {
@@ -676,6 +681,7 @@ async function handleSessionReconnect(connectionId, body) {
                 session.turnCount,
                 null
             );
+            }
         } else {
             // Normal reconnect — send question text separately to avoid transcript duplication
             if (session.questionText) {
