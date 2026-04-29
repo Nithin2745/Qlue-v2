@@ -768,8 +768,18 @@ Resources:
             TableName: !Ref UsersTable
         - S3CrudPolicy:
             BucketName: !Ref ResumesBucket
-        - AmazonTextractFullAccess
-        - AmazonBedrockFullAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - textract:AnalyzeDocument
+                - textract:DetectDocumentText
+              Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource: '*'
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - Statement:
 
