@@ -345,6 +345,11 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: prod
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
       BinaryMediaTypes:
         - "application/octet-stream"
         - "audio/pcm"
@@ -390,6 +395,9 @@ Resources:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       StageName: prod
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
       ApiId: !Ref WebSocketApi
       DeploymentId: !Ref WebSocketDeployment
       AutoDeploy: true

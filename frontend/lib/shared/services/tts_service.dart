@@ -13,6 +13,7 @@ class TtsService {
   final List<Uint8List> _queue = [];
   bool _isPlaying = false;
   bool _lastChunkReceived = false;
+  final BytesBuilder _audioBuffer = BytesBuilder();
 
   bool get isPlaying => _isPlaying;
   List<Uint8List> get queue => List.unmodifiable(_queue);
@@ -27,18 +28,19 @@ class TtsService {
     if (base64Data.isNotEmpty) {
       try {
         final bytes = base64Decode(base64Data);
-        _queue.add(bytes);
+        _audioBuffer.add(bytes);
       } catch (e) {
         debugPrint('TTS Decode Error: $e');
       }
     }
 
+    if (_audioBuffer.length >= 15000 || (isLast && _audioBuffer.isNotEmpty)) {
+      _queue.add(_audioBuffer.takeBytes());
+    }
+
     if (!_isPlaying && _queue.isNotEmpty) {
       _startPlayback();
     } else if (_lastChunkReceived && !_isPlaying && _queue.isEmpty) {
-      // Edge case: All audio chunks already finished playing before the isLast
-      // signal arrived (e.g., short response with fast playback).
-      // Fire completion immediately since there's nothing left to play.
       debugPrint('TTS: isLast received after queue drained — firing completion immediately');
       _lastChunkReceived = false;
       onPlaybackComplete?.call();
@@ -59,8 +61,6 @@ class TtsService {
           
           await _player.onPlayerComplete.first
               .timeout(const Duration(seconds: 30), onTimeout: () => null);
-          
-          await Future.delayed(const Duration(milliseconds: 50));
         } catch (e) {
           debugPrint('TTS Chunk Playback Error: $e');
         }

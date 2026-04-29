@@ -52,6 +52,7 @@ class InterviewProvider extends ChangeNotifier {
   final WebSocketClient _wsClient = WebSocketClient();
   bool _isStartingListening = false;
   bool _isCleanedUp = false;
+  Timer? _watchdogTimer;
 
 
   void resetForNewSession() {
@@ -253,6 +254,7 @@ class InterviewProvider extends ChangeNotifier {
         errorMessage = payload['message'];
         isStreamingText = false;
         currentPhase = InterviewPhase.ready; // FIX: reset phase on error
+        _watchdogTimer?.cancel();
         _ttsService.stop();
         notifyListeners();
         break;
@@ -266,8 +268,15 @@ class InterviewProvider extends ChangeNotifier {
         currentPhase = InterviewPhase.speaking;
         _stopListening();
         _ttsService.stop(); // FIX: Clear old audio to prevent overlap with new turn
+        
+        _watchdogTimer?.cancel();
+        _watchdogTimer = Timer(const Duration(seconds: 25), () {
+          debugPrint('Watchdog timer triggered: reconnecting session');
+          _wsClient.send('session_reconnect', {'sessionId': sessionId});
+        });
         break;
       case 'USER_RESPONDING':
+        _watchdogTimer?.cancel();
         // FIX: Only set the phase — do NOT call _startListening() here.
         // The mic is enabled exclusively by TTS onPlaybackComplete callback.
         // This prevents double _startListening() and the mic-before-audio-finishes race.
@@ -280,10 +289,12 @@ class InterviewProvider extends ChangeNotifier {
         }
         break;
       case 'PROCESSING_RESPONSE':
+        _watchdogTimer?.cancel();
         currentPhase = InterviewPhase.processing;
         _stopListening();
         break;
       case 'SILENCE_DETECTED':
+        _watchdogTimer?.cancel();
         currentPhase = InterviewPhase.processing;
         _stopListening();
         break;
@@ -292,6 +303,7 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   Future<void> onAudioPlaybackComplete() async {
+    _watchdogTimer?.cancel();
     // This is the SINGLE entry point for enabling the mic after AI finishes speaking.
     // It fires only after ALL TTS audio chunks have been played through the speaker.
     // Phase may be 'speaking' (normal) or 'listening' (if session_state_update arrived early).
@@ -431,6 +443,7 @@ class InterviewProvider extends ChangeNotifier {
   void _cleanup() {
     if (_isCleanedUp) return;
     _isCleanedUp = true;
+    _watchdogTimer?.cancel();
     _stopListening();
     _ttsService.stop();
     _stopSilenceTimer();

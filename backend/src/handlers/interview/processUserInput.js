@@ -126,19 +126,28 @@ exports.handler = async (event) => {
         let scores = {};
         if (textTranscript && textTranscript.trim().length > 2) {
             const promptParams = buildScoringPrompt(session.moduleType, textTranscript || '', dims);
+            let rawText = "";
             try {
               const bedrockResult = await invokeModel(undefined, promptParams);
               if (bedrockResult?.content?.[0]?.text) {
-                const rawText = bedrockResult.content[0].text.trim();
-                // Strip markdown code fences if present
-            const jsonText = rawText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
-            scores = JSON.parse(jsonText);
-          }
-        } catch (e) {
-          console.error('Bedrock evaluation failed cleanly.', e);
-          scores = {};
+                rawText = bedrockResult.content[0].text.trim();
+                const jsonText = rawText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+                scores = JSON.parse(jsonText);
+              }
+            } catch (e) {
+              console.error('Bedrock evaluation JSON parse failed, trying regex fallback.', e);
+              scores = {};
+              if (rawText) {
+                for (const dim of dims) {
+                  const regex = new RegExp('"' + dim + '"\\s*:\\s*(\\d+)', 'i');
+                  const match = rawText.match(regex);
+                  if (match && match[1]) {
+                    scores[dim] = parseInt(match[1], 10);
+                  }
+                }
+              }
+            }
         }
-    }
 
         // --- 3. ADAPTIVE TUTORING ---
         if (session.moduleType === 'WEBSITE' && currentConceptId) {
