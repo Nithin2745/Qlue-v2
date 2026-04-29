@@ -501,7 +501,15 @@ async function handleTextTranscript(connectionId, body) {
   await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is generating next question.");
 
   // FIX: Lock DB into AI_SPEAKING to activate Barge-In guards during the 20-second stream
-  await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING);
+  try {
+    await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING);
+  } catch (error) {
+    if (error.message && error.message.includes("AI_SPEAKING -> AI_SPEAKING")) {
+      console.warn(`[Concurrent Duplicate] Suppressed duplicate transcript state transition: ${error.message}`);
+      return { statusCode: 200 };
+    }
+    throw error;
+  }
 
   await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
 

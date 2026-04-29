@@ -306,10 +306,13 @@ class InterviewProvider extends ChangeNotifier {
 
   void sendTextTranscript(String text) {
     // FIX 2: Block if TTS is physically playing (race condition protection)
-    if (currentPhase == InterviewPhase.speaking || _ttsService.isPlaying || isSessionEnded) {
-      debugPrint('Blocked transcript send: AI is speaking, TTS is active, or session ended');
+    if (currentPhase == InterviewPhase.speaking || currentPhase == InterviewPhase.processing || _ttsService.isPlaying || isSessionEnded) {
+      debugPrint('Blocked transcript send: AI is speaking, processing, TTS is active, or session ended');
       return;
     }
+
+    currentPhase = InterviewPhase.processing;
+    _stopListening();
     
     transcript.add(TranscriptEntry(
       role: 'user',

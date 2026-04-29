@@ -99,7 +99,7 @@ class SttService {
   Future<void> stop() async {
     try {
       if (_speech.isListening) {
-        await _speech.stop();
+        await _speech.cancel();
       }
     } catch (e) {
       debugPrint('STT: Error stopping: $e');
