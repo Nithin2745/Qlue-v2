@@ -30,11 +30,19 @@ exports.handler = async (event) => {
             closingStatement = "Understood. We will wrap up the interview here. Thank you for your time.";
         }
 
-        // Ideally, here we trigger Rishi's SNS generation trigger
-        // e.g. await sns.publish({ TopicArn: FEEDBACK_TOPIC, Message: JSON.stringify({sessionId}) })
-
-        // Transition finally to TERMINATED since we're returning the closing statement
+        // Ensure session is closed so UI completes
         await transitionState(sessionId, INTERVIEW_STATES.TERMINATED);
+
+        // Ideally, here we trigger Rishi's SNS generation trigger
+        const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
+        const sns = new SNSClient({});
+        if (process.env.FEEDBACK_TOPIC) {
+            try {
+                await sns.send(new PublishCommand({ TopicArn: process.env.FEEDBACK_TOPIC, Message: JSON.stringify({sessionId}) }));
+            } catch (e) {
+                console.error("SNS Publish Failed:", e);
+            }
+        }
 
         return {
             statusCode: 200,
@@ -44,7 +52,7 @@ exports.handler = async (event) => {
                     sessionId,
                     nextAIResponse: closingStatement,
                     onlyQuestion: closingStatement,
-                    state: INTERVIEW_STATES.AI_SPEAKING,
+                    state: INTERVIEW_STATES.TERMINATED,
                     message: `Session terminated due to ${reason}`
                 }
             })

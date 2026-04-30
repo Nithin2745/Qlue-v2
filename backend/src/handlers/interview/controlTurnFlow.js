@@ -2,12 +2,11 @@ const { INTERVIEW_STATES, updateSessionState, getSession } = require('../../mode
 
 // Deterministic 8-state machine definition
 const VALID_TRANSITIONS = {
-    [INTERVIEW_STATES.INITIALIZING]: [INTERVIEW_STATES.LOADING_CONTEXT, INTERVIEW_STATES.ERROR],
+    [INTERVIEW_STATES.INITIALIZING]: [INTERVIEW_STATES.LOADING_CONTEXT, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.ERROR],
     [INTERVIEW_STATES.LOADING_CONTEXT]: [INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.ERROR],
     [INTERVIEW_STATES.AI_SPEAKING]: [
         INTERVIEW_STATES.USER_RESPONDING, 
         INTERVIEW_STATES.GENERATING_FEEDBACK, 
-        INTERVIEW_STATES.AI_SPEAKING, // FIX: allow re-prompt
         INTERVIEW_STATES.ERROR
     ],
     
@@ -51,7 +50,10 @@ async function transitionState(sessionId, targetState, updates = {}) {
         throw new Error(`Invalid interview state transition: ${currentState} -> ${targetState}`);
     }
 
-    return await updateSessionState(sessionId, targetState, currentState, updates);
+    return await updateSessionState(sessionId, targetState, currentState, {
+        ...updates,
+        expectedVersion: session.version
+    });
 }
 
 module.exports = {

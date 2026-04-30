@@ -68,7 +68,7 @@ async function fetchAndCleanContent(url) {
   }
 
   const encodedTargetUrl = encodeURIComponent(url);
-  const scrapeApiUrl = `http://api.scrape.do?token=${apiKey}&url=${encodedTargetUrl}`;
+  const scrapeApiUrl = `https://api.scrape.do?token=${apiKey}&url=${encodedTargetUrl}`;
 
   try {
     // Native Node v18+ fetch

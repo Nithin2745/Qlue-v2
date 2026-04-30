@@ -39,7 +39,7 @@ dependencies:
   flutter_svg: ^2.0.10+1
   google_fonts: ^8.0.2
   file_picker: ^11.0.2
-  audioplayers: ^6.6.0
+  just_audio: ^0.9.36
   go_router: ^17.2.1
   web_socket_channel: ^3.0.3
   speech_to_text: ^7.3.0

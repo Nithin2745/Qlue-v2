@@ -47,11 +47,9 @@ async function registerConnection(connectionId, userId) {
  * Marks connection as dead inside DDB.
  */
 async function deregisterConnection(connectionId) {
-  return await ddb.update(
+  return await ddb.delete(
     WS_CONNECTIONS_TABLE,
-    { connectionId },
-    'SET isActive = :val',
-    { ':val': 'false' }
+    { connectionId }
   );
 }
 

@@ -1,9 +1,9 @@
-const { getSession } = require('../../models/session');
+const { getSession, updateSessionState } = require('../../models/session');
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
 const { getTranscriptBySession } = require('../../models/transcript');
 const { invokeModel, buildResumeQuestionPrompt, buildHRQuestionPrompt, buildWebsiteTeachPrompt } = require('../../lib/bedrock');
-const { success, internalError } = require('../../lib/response');
+const { success, internalError, notFound } = require('../../lib/response');
 
 /**
  * AWS Lambda Handler: POST /interview/question
@@ -15,7 +15,7 @@ exports.handler = async (event) => {
         
         const session = await getSession(sessionId);
         if (!session) {
-            return internalError('Session not found');
+            return notFound('Session not found');
         }
 
         const userId = session.userId;
@@ -141,15 +141,20 @@ exports.handler = async (event) => {
                 if (!websiteUrl) {
                     onlyQuestion = "To get started with tutoring, please provide a website URL you'd like to learn about.";
                 } else {
-                    const { scrapeWebsite } = require('../../lib/scraper');
-                    const { getConceptsForWebsite } = require('../../models/conceptState');
+                    const { fetchAndCleanContent } = require('../../lib/scraper');
+                    const { getConceptsBySession } = require('../../models/conceptState');
                     
-                    const content = await scrapeWebsite(websiteUrl);
-                    const concepts = await getConceptsForWebsite(websiteUrl);
+                    const scraped = await fetchAndCleanContent(websiteUrl);
+                    const content = scraped.content;
+                    const concepts = await getConceptsBySession(sessionId);
                     
                     // Use first concept if not specified
-                    const targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0] : "General Overview");
+                    const targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0].conceptId : "General Overview");
                     
+                    // Bug 9: Save selected concept to session
+                    // Bug 6: Use null for expectedCurrentState to avoid locking failures on non-critical metadata update
+                    await updateSessionState(sessionId, session.currentState, null, { currentConceptId: targetConcept });
+
                     const prompt = buildWebsiteTeachPrompt(targetConcept, content, history, false);
                     const bedrockResult = await invokeModel(undefined, prompt);
                     

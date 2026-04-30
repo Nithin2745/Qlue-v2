@@ -43,7 +43,7 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, params, options = {}) {
       
       // Standardize response format
       const responseBody = {
-        content: [{ text: response.output.message.content[0].text }],
+        content: [{ text: response.output?.message?.content?.[0]?.text ?? '' }],
         usage: response.usage
       };
 
@@ -87,22 +87,19 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
     });
 
     try {
-        const response = await bedrockClient.send(command);
-        let fullText = "";
-        let isTimedOut = false;
-        
+        const abortController = new AbortController();
         let timeoutTimer = setTimeout(() => {
-            isTimedOut = true;
+            abortController.abort();
         }, 15000);
 
+        const response = await bedrockClient.send(command, { abortSignal: abortController.signal });
+        let fullText = "";
+
         for await (const event of response.stream) {
-            if (isTimedOut) {
-                throw new Error("BEDROCK_TIMEOUT");
-            }
             // Reset timer on token received
             clearTimeout(timeoutTimer);
             timeoutTimer = setTimeout(() => {
-                isTimedOut = true;
+                abortController.abort();
             }, 15000);
 
             if (event.contentBlockDelta) {
@@ -115,7 +112,7 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
         return fullText;
     } catch (error) {
         console.error('Bedrock Streaming Error:', error);
-        if (error.message === 'BEDROCK_TIMEOUT' || error.name === 'TimeoutError') {
+        if (error.name === 'AbortError' || error.message === 'BEDROCK_TIMEOUT' || error.name === 'TimeoutError') {
             throw new QlueError('Bedrock stream timed out after 15 seconds of inactivity.', 'BEDROCK_TIMEOUT', 504, error.message);
         }
         throw new QlueError('Bedrock Streaming Error', 'BEDROCK_ERROR', 500, error.message);
@@ -128,25 +125,59 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
  */
 function buildInterviewPrompt(context, history, turnCount, moduleType) {
   let systemContent = "";
+
   if (moduleType === 'RESUME') {
-    systemContent = `You are an expert technical interviewer. You are conducting an interview based on the following candidate context:
+    const questionTypes = ['depth', 'experience', 'problem-solving'];
+    const questionType = questionTypes[turnCount % questionTypes.length];
+
+    systemContent = `You are Qlue, a technical interviewer with the candidate's resume.
+Resume data:
 ${typeof context === 'object' ? JSON.stringify(context) : context}
 
-Your goal is to ask one concise technical question.
-Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+CRITICAL VOICE RULES:
+- Output will be spoken aloud. Write ONLY what a human interviewer would say.
+- NEVER use markdown, bullet points, numbered lists, or formatting.
+- NEVER evaluate the previous answer or include meta-commentary.
+- NEVER repeat a question already asked.
+- NEVER greet the user or introduce yourself. The system already handled the greeting.
+- Keep each response to ONE technical question, max 40 words.
+- Use complete sentences. End with a clear question.
+- Spell out technical terms on first use.
+Reference specific technologies and projects from the resume.
+This turn's question type: ${questionType}. Alternate between depth, experience, and problem-solving questions.
+After 6-8 questions, conclude with 'Thank you. The technical interview is complete.'`;
+
   } else if (moduleType === 'HR') {
-    systemContent = `You are an HR recruiter.
-Please ask one concise behavioral question using the STAR framework.
-Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
-  } else if (moduleType === 'SELF_INTRO') {
-    systemContent = `You are an expert communication coach conducting a self-introduction exercise.
-Ask one concise follow-up question regarding their introduction to probe deeper.
-Do not evaluate the previous answer. Just ask the next question and wait for the user to respond.
-Return ONLY the question text, no JSON or extra formatting. Your response will be spoken directly to the user.`;
+    const hrTopics = ['teamwork', 'problem-solving', 'leadership', 'conflict', 'adaptability'];
+    const currentTopic = hrTopics[turnCount % hrTopics.length];
+
+    systemContent = `You are Qlue, a professional HR interviewer.
+Current topic: ${currentTopic}.
+
+CRITICAL VOICE RULES:
+- Output will be spoken aloud. Write ONLY spoken text.
+- NEVER use markdown, bullet points, numbered lists, or formatting.
+- NEVER evaluate, give feedback, or include meta-commentary.
+- NEVER repeat a question already asked.
+- NEVER greet the user or introduce yourself. The system already handled the greeting.
+- Keep each response to ONE behavioral question, max 40 words.
+- Use complete sentences. End with a question mark.
+Progress through: teamwork, problem-solving, leadership, conflict, adaptability.
+Use STAR framework questions with specific scenarios.
+After 5-6 questions, conclude with 'Thank you. This concludes our interview.'`;
+
+  } else if (moduleType === 'INTRO') {
+    systemContent = `You are Qlue, a communication coach. NEVER use markdown or bullet points.
+Write ONLY spoken text, max 40 words per response.
+Do NOT evaluate or give feedback during the exercise.
+Do NOT greet the user or introduce yourself.
+Ask one follow-up question about the introduction.`;
+
   } else {
-    systemContent = `You are an interviewer. Ask one concise question. Do not evaluate the answer. Wait for the user to respond.`;
+    systemContent = `You are Qlue, an interviewer. Ask one concise question, max 40 words.
+NEVER use markdown, bullet points, or formatting. Write ONLY spoken text.
+Do NOT greet the user or introduce yourself.
+Wait for the user to respond.`;
   }
 
   return {
@@ -163,10 +194,13 @@ Return ONLY the question text, no JSON or extra formatting. Your response will b
  */
 function buildTutorPrompt(websiteUrl, history, userAnswer) {
   return {
-    system: `You are a tutor. The user is learning about content from this website: ${websiteUrl}.
-Check the user's answer for correctness. If it's incorrect or incomplete, explain their mistakes gently and provide the right approach. Then, ask the next question.
-If they are correct, confirm it and proceed to the next concept.
-Return ONLY your response text (the verification/guidance and the next question), no JSON or extra formatting. Your response will be spoken directly to the user.`,
+    system: `You are Qlue, a patient tutor. The user is learning from: ${websiteUrl}.
+Output will be spoken aloud.
+NEVER use markdown, bullet points, or formatting.
+Max 50 words for explanations, 25 words for questions.
+When correct: confirm in 5 words max then ask next question.
+When incorrect: correct in one sentence then ask next question.
+NEVER lecture for more than two sentences.`,
     messages: [
       ...history,
       { role: 'user', content: [{ text: userAnswer ? `My answer: ${userAnswer}` : "Let's begin." }] }
@@ -177,18 +211,19 @@ Return ONLY your response text (the verification/guidance and the next question)
 /**
  * General scoring based on module dimensions
  */
-function buildScoringPrompt(moduleType, transcript, dimensions) {
+function buildScoringPrompt(moduleType, latestResponse, dimensions) {
   return {
-    system: `You are an AI Interview evaluator analyzing a ${moduleType} interview session.
-Please score the applicant across these dimensions: ${dimensions.join(', ')}.
-Transcript:
-${JSON.stringify(transcript)}
-
-Format your output strictly as JSON mapping each dimension to a score between 1-100.`,
+    system: `You are an interview evaluator. Score ONLY the candidate's LATEST response.
+Response to evaluate: "${typeof latestResponse === 'string' ? latestResponse : JSON.stringify(latestResponse)}"
+Dimensions: ${dimensions.join(', ')}.
+Rules:
+- Score each dimension 1-100 based ONLY on the latest response.
+- 3+ sentences with examples = 70-100. 1-2 sentences = 30-60. Short or irrelevant = 1-30.
+- Return ONLY JSON with dimension names as keys and numeric scores as values. No markdown, no explanation.`,
     messages: [
       {
         role: 'user',
-        content: [{ text: "Please score this interview based on the provided transcript and dimensions." }]
+        content: [{ text: "Score ONLY the latest response above across the listed dimensions." }]
       }
     ]
   };
@@ -276,7 +311,9 @@ Instructions:
 
 function buildSelfIntroEvalPrompt(transcript) {
   return {
-    system: "You are an expert communication coach. Evaluate the self-introduction provided.",
+    system: `You are an expert communication coach. Evaluate the self-introduction provided.
+    Provide constructive feedback and a follow-up question to improve the pitch.
+    Return response as JSON: {"response": "your feedback and follow-up"}`,
     messages: [
       { role: 'user', content: [{ text: `Introduction to evaluate: ${transcript}` }] }
     ]

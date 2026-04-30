@@ -8,7 +8,16 @@ const MESSAGE_TYPES = {
   HEARTBEAT: 'heartbeat',
   SESSION_RESUME: 'session_resume',
   SESSION_STATE_UPDATE: 'session_state_update',
-  ERROR: 'error'
+  ERROR: 'error',
+  TTS_AUDIO_CHUNK: 'tts_audio_chunk',
+  AI_SPEAKING_COMPLETE: 'ai_speaking_complete',
+  SESSION_TEXT_STREAM: 'session_text_stream',
+  QUESTION_TEXT_UPDATE: 'question_text_update',
+  TERMINATION: 'termination',
+  SILENCE_DETECTED: 'silence_detected',
+  SESSION_RECONNECT: 'session_reconnect',
+  PING: 'ping',
+  PONG: 'pong'
 };
 
 /**

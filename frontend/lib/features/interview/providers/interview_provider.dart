@@ -23,6 +23,7 @@ class TranscriptEntry {
 class InterviewProvider extends ChangeNotifier {
   String? sessionId;
   String? moduleType;
+  String? currentConceptId; // Bug 5: Track current concept for WEBSITE mode
   InterviewPhase currentPhase = InterviewPhase.ready;
   int currentTurnIndex = 0;
   
@@ -42,7 +43,6 @@ class InterviewProvider extends ChangeNotifier {
   String? errorMessage;
   bool isSessionEnded = false;
 
-  final List<List<int>> _audioChunkQueue = [];
   int _silenceStrikes = 0;
   int get silenceStrikes => _silenceStrikes;
   Timer? _silenceTimer;
@@ -50,9 +50,10 @@ class InterviewProvider extends ChangeNotifier {
   final SttService _sttService = SttService();
   final TtsService _ttsService = TtsService();
   final WebSocketClient _wsClient = WebSocketClient();
-  bool _isLastAudioChunkReceived = false;
   bool _isStartingListening = false;
   bool _isCleanedUp = false;
+  Timer? _watchdogTimer;
+  Timer? _heartbeatTimer;
 
 
   void resetForNewSession() {
@@ -60,8 +61,8 @@ class InterviewProvider extends ChangeNotifier {
     isConnecting = true;
     _isCleanedUp = false;
     _isStartingListening = false;
-    _isLastAudioChunkReceived = false;
     sessionId = null;
+    currentConceptId = null;
     subtitleText = "";
     isStreamingText = false;
     finalTranscript = "";
@@ -83,7 +84,6 @@ class InterviewProvider extends ChangeNotifier {
     _cleanup();
     _isCleanedUp = false;
     _isStartingListening = false;
-    _isLastAudioChunkReceived = false;
     
     isConnecting = true;
     isSessionEnded = false;
@@ -100,6 +100,7 @@ class InterviewProvider extends ChangeNotifier {
     questionText = "";
     finalQuestionText = "";
     transcript.clear();
+    currentConceptId = null;
     currentPhase = InterviewPhase.ready;
     currentTurnIndex = 0;
 
@@ -110,6 +111,15 @@ class InterviewProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final voiceId = prefs.getString('selected_voice') ?? 'Tiffany';
       final engine = prefs.getString('selected_engine') ?? 'generative';
+
+      // FIX 1: Request microphone permission EARLY (before any audio)
+      final sttReady = await _sttService.init();
+      if (!sttReady) {
+        errorMessage = "Microphone permission is required. Please enable it in app settings.";
+        isConnecting = false;
+        notifyListeners();
+        return;
+      }
 
       final response = await DioClient().dio.post(
         ApiConstants.interviewInit,
@@ -142,9 +152,12 @@ class InterviewProvider extends ChangeNotifier {
   Future<void> _connectWebSocket(String url, String token) async {
     await _wsClient.connect(url, token);
     _wsClient.onMessage.listen(_handleIncomingMessage);
-    // REMOVED: Unreliable local playback listener
-    // _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
-    _isLastAudioChunkReceived = false;
+    // Wire up TTS completion: when all audio finishes playing, transition to listening.
+    // This is the SINGLE source of truth for enabling the mic — prevents race condition
+    // where mic enables while AI audio is still playing through the speaker.
+    _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
+    // Store sessionId on WebSocket client for reconnection
+    _wsClient.setSessionId(sessionId);
     startInterview();
   }
 
@@ -155,6 +168,12 @@ class InterviewProvider extends ChangeNotifier {
       'moduleType': moduleType,
     });
     isConnecting = false;
+
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(minutes: 3), (timer) {
+      _wsClient.send('ping', {});
+    });
+
     notifyListeners();
   }
 
@@ -166,24 +185,22 @@ class InterviewProvider extends ChangeNotifier {
       case 'tts_audio_chunk':
         final base64Data = payload['audioData'] ?? '';
         final isLast = payload['isLast'] == true;
+        final chunkIndex = payload['chunkIndex'] as int?;
 
-        if (isLast) {
-          _isLastAudioChunkReceived = true;
-        }
-
-        if (base64Data.isNotEmpty) {
-          _ttsService.playBase64Chunk(base64Data, isLast);
-        }
-
-        // Transitioning is now handled by ai_speaking_complete
+        // CRITICAL: Always pass to TTS service, even when base64Data is empty.
+        // The isLast flag with empty data signals "no more chunks coming" —
+        // TTS service needs this to fire onPlaybackComplete after draining its queue.
+        _ttsService.playBase64Chunk(base64Data, isLast, chunkIndex: chunkIndex);
         break;
 
       case 'ai_speaking_complete':
+        // Only update subtitle text — do NOT start listening here.
+        // Listening is triggered SOLELY by TTS onPlaybackComplete callback to avoid
+        // the race condition where mic enables while AI audio is still playing.
         if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
           subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
           isStreamingText = false;
           notifyListeners();
-          _startListening(); // ✅ Start listening on backend signal
         }
         break;
 
@@ -204,16 +221,30 @@ class InterviewProvider extends ChangeNotifier {
         }
         break;
 
-      case 'session_state_update':
-        final newQuestion = payload['questionText'];
-        if (newQuestion != null && newQuestion != "...") {
-          questionText = newQuestion;
-          finalQuestionText = newQuestion; // Store finalized question
+      case 'question_text_update':
+        // Handle finalized question text from backend (no state transition)
+        final questionUpdate = payload['questionText'];
+        if (questionUpdate != null && questionUpdate != "...") {
+          questionText = questionUpdate;
+          finalQuestionText = questionUpdate;
+          // Bug 5: Store current concept ID for website tutoring
+          if (payload['currentConceptId'] != null) {
+            currentConceptId = payload['currentConceptId'];
+          }
           transcript.add(TranscriptEntry(
             role: 'ai',
             text: questionText,
             timestamp: DateTime.now(),
           ));
+        }
+        notifyListeners();
+        break;
+
+      case 'session_state_update':
+        final newQuestion = payload['questionText'];
+        if (newQuestion != null && newQuestion != "...") {
+          questionText = newQuestion;
+          finalQuestionText = newQuestion; // Store finalized question
         }
 
         final state = payload?['state'];
@@ -229,7 +260,10 @@ class InterviewProvider extends ChangeNotifier {
 
       case 'error':
         errorMessage = payload['message'];
-        isStreamingText = false; // FIX: reset streaming flag
+        isStreamingText = false;
+        currentPhase = InterviewPhase.ready; // FIX: reset phase on error
+        _watchdogTimer?.cancel();
+        _ttsService.stop();
         notifyListeners();
         break;
     }
@@ -240,30 +274,48 @@ class InterviewProvider extends ChangeNotifier {
     switch (state) {
       case 'AI_SPEAKING':
         currentPhase = InterviewPhase.speaking;
-        _stopListening(); // ✅ Force mic off immediately
+        _stopListening();
+        _ttsService.stop(); // FIX: Clear old audio to prevent overlap with new turn
+        
+        _watchdogTimer?.cancel();
+        _watchdogTimer = Timer(const Duration(seconds: 25), () {
+          debugPrint('Watchdog timer triggered: reconnecting session');
+          _wsClient.send('session_reconnect', {'sessionId': sessionId});
+        });
         break;
       case 'USER_RESPONDING':
+        _watchdogTimer?.cancel();
+        // FIX: Only set the phase — do NOT call _startListening() here.
+        // The mic is enabled exclusively by TTS onPlaybackComplete callback.
+        // This prevents double _startListening() and the mic-before-audio-finishes race.
         currentPhase = InterviewPhase.listening;
-        _startListening();
+        
+        // FIX 5: Only start listening if TTS is physically finished.
+        // If TTS is still active, onPlaybackComplete will trigger it later.
+        if (!_ttsService.isPlaying) {
+          _startListening();
+        }
         break;
       case 'PROCESSING_RESPONSE':
+        _watchdogTimer?.cancel();
         currentPhase = InterviewPhase.processing;
         _stopListening();
         break;
       case 'SILENCE_DETECTED':
-        currentPhase = InterviewPhase.listening; // Ensure we stay in listening phase
-        _silenceStrikes++;
-        if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
-          isSessionEnded = true;
-          _cleanup();
-        }
+        _watchdogTimer?.cancel();
+        currentPhase = InterviewPhase.processing;
+        _stopListening();
         break;
     }
     notifyListeners();
   }
 
   Future<void> onAudioPlaybackComplete() async {
-    if (!isSessionEnded && currentPhase == InterviewPhase.speaking) {
+    _watchdogTimer?.cancel();
+    // This is the SINGLE entry point for enabling the mic after AI finishes speaking.
+    // It fires only after ALL TTS audio chunks have been played through the speaker.
+    // Phase may be 'speaking' (normal) or 'listening' (if session_state_update arrived early).
+    if (!isSessionEnded && (currentPhase == InterviewPhase.speaking || currentPhase == InterviewPhase.listening)) {
       currentPhase = InterviewPhase.listening;
       isStreamingText = false;
       subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
@@ -273,11 +325,14 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void sendTextTranscript(String text) {
-    // ✅ Block if AI is speaking or session ended
-    if (currentPhase == InterviewPhase.speaking || isSessionEnded) {
-      debugPrint('Blocked transcript send: AI is speaking or session ended');
+    // FIX 2: Block if TTS is physically playing (race condition protection)
+    if (currentPhase == InterviewPhase.speaking || currentPhase == InterviewPhase.processing || _ttsService.isPlaying || isSessionEnded) {
+      debugPrint('Blocked transcript send: AI is speaking, processing, TTS is active, or session ended');
       return;
     }
+
+    currentPhase = InterviewPhase.processing;
+    _stopListening();
     
     transcript.add(TranscriptEntry(
       role: 'user',
@@ -288,15 +343,11 @@ class InterviewProvider extends ChangeNotifier {
     _wsClient.send('text_transcript', {
       'sessionId': sessionId,
       'text': text,
+      if (currentConceptId != null) 'currentConceptId': currentConceptId, // Bug 5: Pass current concept
     });
     notifyListeners();
   }
 
-  List<List<int>> consumeAllAudioChunks() {
-    final chunks = List<List<int>>.from(_audioChunkQueue);
-    _audioChunkQueue.clear();
-    return chunks;
-  }
 
   Future<void> endSession() async {
     _wsClient.send('terminate_session', {
@@ -317,7 +368,19 @@ class InterviewProvider extends ChangeNotifier {
     try {
       errorMessage = null; // Clear previous errors
       isListening = true;
+      partialTranscript = "";
+      finalTranscript = "";
       _resetSilenceTimer();
+      
+      _sttService.onStatusChange = (status) {
+        if (status == 'done' || status == 'notListening') {
+          if (isListening) {
+             debugPrint('STT native stop detected. Syncing state...');
+             isListening = false;
+             notifyListeners();
+          }
+        }
+      };
       
       // FIX: Ensure STT is ready
       final ready = await _sttService.init();
@@ -373,21 +436,27 @@ class InterviewProvider extends ChangeNotifier {
 
   void _handleSilence() {
     _silenceStrikes++;
-    if (_silenceStrikes >= AppConstants.maxSilenceStrikes) {
-      isSessionEnded = true;
-      _cleanup();
-    } else {
-      // Potentially notify user of silence
-    }
+    // Send silence event to backend so it can trigger retry/termination logic.
+    // Backend owns the retry counting and session termination — frontend just reports.
+    _wsClient.send('silence_detected', {
+      'sessionId': sessionId,
+      'silenceStrikes': _silenceStrikes,
+    });
+    _stopListening();
+    // NOTE: Do NOT cleanup locally. Backend handles termination via handleSilenceDetected()
+    // and sends a 'termination' message back if max strikes exceeded.
     notifyListeners();
   }
 
   void _cleanup() {
     if (_isCleanedUp) return;
     _isCleanedUp = true;
+    _watchdogTimer?.cancel();
+    _heartbeatTimer?.cancel();
     _stopListening();
+    _ttsService.stop();
     _stopSilenceTimer();
     _wsClient.disconnect();
-    sessionId = null; // ADD THIS
+    sessionId = null;
   }
 }

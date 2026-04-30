@@ -35,6 +35,7 @@ async function createSession(sessionId, userId, moduleType, itemData = {}) {
         updatedAt: now, // FIX: added
         silenceRetries: 0,
         accumulatedScores: {},
+        version: 1,
         activeMarker: "ACTIVE" // Used for Sparse GSI pattern
     };
 
@@ -83,9 +84,11 @@ async function getActiveSessionForUser(userId) {
  * Updates the current state of the interview session, enforcing optimistic locking.
  */
 async function updateSessionState(sessionId, newState, expectedCurrentState = null, updates = {}) {
-    let updateExpression = "SET currentState = :newState";
+    let updateExpression = "SET currentState = :newState, version = if_not_exists(version, :zero) + :one";
     const expressionAttributeValues = {
         ":newState": newState,
+        ":zero": 0,
+        ":one": 1
     };
     let conditionExpression = undefined;
 
@@ -94,9 +97,27 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         expressionAttributeValues[":expectedCurrentState"] = expectedCurrentState;
     }
 
+    if (updates.expectedVersion !== undefined) {
+        if (conditionExpression) {
+            conditionExpression += " AND version = :expectedVersion";
+        } else {
+            conditionExpression = "version = :expectedVersion";
+        }
+        expressionAttributeValues[":expectedVersion"] = updates.expectedVersion;
+    }
+
     if (updates.turnCount !== undefined) {
         updateExpression += ", turnCount = :turnCount";
         expressionAttributeValues[":turnCount"] = updates.turnCount;
+    }
+
+    if (updates.expectedTurnCount !== undefined) {
+        if (conditionExpression) {
+            conditionExpression += " AND turnCount = :expectedTurnCount";
+        } else {
+            conditionExpression = "turnCount = :expectedTurnCount";
+        }
+        expressionAttributeValues[":expectedTurnCount"] = updates.expectedTurnCount;
     }
 
     updateExpression += ", updatedAt = :updatedAt";
@@ -115,6 +136,11 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
     if (updates.questionText !== undefined) {
         updateExpression += ", questionText = :questionText";
         expressionAttributeValues[":questionText"] = updates.questionText;
+    }
+
+    if (updates.currentConceptId !== undefined) {
+        updateExpression += ", currentConceptId = :currentConceptId";
+        expressionAttributeValues[":currentConceptId"] = updates.currentConceptId;
     }
     
     // Cleanup active marker if terminated

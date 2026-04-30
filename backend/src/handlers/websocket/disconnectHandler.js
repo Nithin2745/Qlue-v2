@@ -1,49 +1,44 @@
 /**
  * WebSocket $disconnect route handler.
+ * Implements Stranded State Revert to prevent Ghost Speaking Lockout.
  */
 const { getConnection, deactivateConnection } = require('../../models/wsConnection');
-const { publishFeedbackTrigger } = require('../../lib/sns');
-// const { transitionSessionStatus } = require('../../models/session'); // Skip for now as session.js is placeholder
+const { getSession, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 
 exports.handler = async (event) => {
   const connectionId = event.requestContext.connectionId;
 
   try {
-    // 1. Fetch connection record
-    const connection = await getConnection(connectionId);
-    
-    if (connection) {
-      const { userId, sessionId, isActive } = connection;
+    // 1. Get the session associated with the dropping connection
+    const connectionRecord = await getConnection(connectionId);
 
-      if (isActive === 'true') {
-        // 2. Handle active session if connection lost
-        if (sessionId) {
-          console.info(`Connection ${connectionId} lost for session ${sessionId}. Handling potential feedback trigger.`);
-          
-          // Note: In a real implementation, we'd check if the session is still active 
-          // and transition it to TERMINATEDABORTED. 
-          // Since session.js is a placeholder, we skip the DB update but trigger the pipeline 
-          // if the session reached a point that warrants it.
-          
-          // For now, we only publish feedback trigger if the session was explicitly marked as needing one.
-          // However, task 2 says: "transition to TERMINATEDABORTED if active... then publish SNS".
-          // We will log the intention and publish the trigger.
-          console.info(`[DEFERRED] Transitioning session ${sessionId} to TERMINATEDABORTED.`);
-          
-          await publishFeedbackTrigger(sessionId, userId, 'AUTO_DISCONNECT', 'CONNECTION_LOST');
+    if (connectionRecord && connectionRecord.sessionId) {
+      const sessionId = connectionRecord.sessionId;
+      const session = await getSession(sessionId);
+
+      // 2. GHOST STATE PREVENTION:
+      // If the connection drops while the DB is locked, the audio stream is dead.
+      // Revert to USER_RESPONDING so the UI unlocks when the user reconnects.
+      if (session && (session.currentState === INTERVIEW_STATES.AI_SPEAKING || session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE)) {
+        console.warn(`[Disconnect Guard] Session ${sessionId} stranded in ${session.currentState}. Reverting to USER_RESPONDING.`);
+
+        // Try/catch suppresses conditional check failures if Bedrock is actively moving the state
+        try {
+          await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, session.currentState, { message: 'Connection dropped. Reverted.' });
+        } catch (err) {
+          console.warn(`[Disconnect Guard] State safely moved by another process: ${err.message}`);
         }
-
-        // 3. Mark connection as inactive
-        await deactivateConnection(connectionId);
       }
     }
 
-    console.info(`Successfully processed disconnect for connectionId: ${connectionId}`);
-    return { statusCode: 200, body: 'Disconnected' };
+    // 3. Clean up the connection record
+    await deactivateConnection(connectionId);
 
+    console.info(`Successfully processed disconnect for connectionId: ${connectionId}`);
+    return { statusCode: 200 };
   } catch (error) {
-    console.error(`Disconnect failed for connectionId: ${connectionId}`, error);
+    console.error('[Disconnect Error]', error);
     // Standard practice for $disconnect: always return 200 to AWS
-    return { statusCode: 200, body: 'Disconnected with errors' };
+    return { statusCode: 500 };
   }
 };

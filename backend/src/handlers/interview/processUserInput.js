@@ -12,7 +12,8 @@ const terminateSession = require('./terminateSession');
 const DIMENSIONS = {
     RESUME: ['technical accuracy', 'communication clarity', 'fluency', 'depth of knowledge', 'use of examples'],
     WEBSITE: ['concept understanding', 'learning agility', 'application ability', 'fluency', 'comprehension accuracy'],
-    HR: ['STAR format adherence', 'teamwork demonstration', 'ethical thinking', 'cultural alignment', 'vocabulary']
+    HR: ['STAR format adherence', 'teamwork demonstration', 'ethical thinking', 'cultural alignment', 'vocabulary'],
+    INTRO: ['clarity of message', 'confidence', 'structure', 'relevance of content', 'brevity']
 };
 
 function validateDTO(body) {
@@ -26,16 +27,26 @@ exports.handler = async (event) => {
         const body = JSON.parse(event.body || '{}');
         validateDTO(body);
 
-        const { sessionId, textTranscript, currentConceptId, isSilence } = body;
-
+        const { sessionId, textTranscript, isSilence } = body;
+        
         const session = await getSession(sessionId);
         if (!session) throw new Error('Session not found');
+
+        const currentConceptId = body.currentConceptId || session.currentConceptId;
+
+        if (session.currentState === INTERVIEW_STATES.AI_SPEAKING || session.currentState === 'SYNTHESIZING_AUDIO') {
+            return {
+                statusCode: 200,
+                body: JSON.stringify({ success: true, message: 'Input ignored: AI is speaking' })
+            };
+        }
 
         // [Mouli Week 4: Deadlock Recovery]
         if (session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE) {
             const deadlockTime = Date.now() - new Date(session.updatedAt || session.startTime).getTime();
             if (deadlockTime > 60 * 1000) {
                 // Recover the session silently
+                await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.PROCESSING_RESPONSE, { message: 'Recovered from Deadlock.' });
                 return {
                     statusCode: 200,
                     body: JSON.stringify({
@@ -56,7 +67,16 @@ exports.handler = async (event) => {
         }
 
         // --- 0. INITIAL TRANSITION ---
-        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
+        if (session.currentState !== INTERVIEW_STATES.PROCESSING_RESPONSE) {
+            try {
+                await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, session.currentState, { expectedTurnCount: session.turnCount });
+            } catch (err) {
+                if (err.name === 'ConditionalCheckFailedException') {
+                    return { statusCode: 409, body: JSON.stringify({ success: false, message: 'Conflict: Turn already processing' }) };
+                }
+                throw err;
+            }
+        }
 
         // --- 1. SILENCE NEGOTIATION W/ RETRIES ---
         if (isSilence) {
@@ -102,20 +122,31 @@ exports.handler = async (event) => {
         if (textTranscript) await saveTranscript(sessionId, session.turnCount, SPEAKERS.USER, textTranscript);
 
         const dims = DIMENSIONS[session.moduleType] || DIMENSIONS.RESUME;
-        const promptParams = buildScoringPrompt(session.moduleType, textTranscript || '', dims);
         
         let scores = {};
-        try {
-          const bedrockResult = await invokeModel(undefined, promptParams);
-          if (bedrockResult?.content?.[0]?.text) {
-            const rawText = bedrockResult.content[0].text.trim();
-            // Strip markdown code fences if present
-            const jsonText = rawText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
-            scores = JSON.parse(jsonText);
-          }
-        } catch (e) {
-          console.error('Bedrock evaluation failed cleanly.', e);
-          scores = {};
+        if (textTranscript && textTranscript.trim().length > 2) {
+            const promptParams = buildScoringPrompt(session.moduleType, textTranscript || '', dims);
+            let rawText = "";
+            try {
+              const bedrockResult = await invokeModel(undefined, promptParams);
+              if (bedrockResult?.content?.[0]?.text) {
+                rawText = bedrockResult.content[0].text.trim();
+                const jsonText = rawText.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+                scores = JSON.parse(jsonText);
+              }
+            } catch (e) {
+              console.error('Bedrock evaluation JSON parse failed, trying regex fallback.', e);
+              scores = {};
+              if (rawText) {
+                for (const dim of dims) {
+                  const regex = new RegExp('"' + dim + '"\\s*:\\s*(\\d+)', 'i');
+                  const match = rawText.match(regex);
+                  if (match && match[1]) {
+                    scores[dim] = parseInt(match[1], 10);
+                  }
+                }
+              }
+            }
         }
 
         // --- 3. ADAPTIVE TUTORING ---
@@ -142,15 +173,17 @@ exports.handler = async (event) => {
         // --- 5. GENERATE NEXT RESPONSE (Specialized for Tutor Mode) ---
         let nextAIResponse = "";
         let onlyQuestion = "";
+        let targetConcept = null; // Bug 1: Declare at top scope
         
         if (session.moduleType === 'WEBSITE') {
-            const { scrapeWebsite } = require('../../lib/scraper');
-            const { getConceptsForWebsite } = require('../../models/conceptState');
+            const { fetchAndCleanContent } = require('../../lib/scraper');
+            const { getConceptsBySession } = require('../../models/conceptState');
             
             const websiteUrl = session.itemData?.websiteUrl || "";
-            const content = await scrapeWebsite(websiteUrl);
-            const concepts = await getConceptsForWebsite(websiteUrl);
-            const targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0] : "General Overview");
+            const scraped = await fetchAndCleanContent(websiteUrl);
+            const content = scraped.content;
+            const concepts = await getConceptsBySession(sessionId);
+            targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0].conceptId : "General Overview");
 
             const prompt = buildWebsiteTeachPrompt(targetConcept, content, (await getTranscriptBySession(sessionId)).map(t => ({
                 role: t.speaker === 'USER' ? 'user' : 'assistant',
@@ -203,10 +236,16 @@ exports.handler = async (event) => {
             onlyQuestion = null;
         }
 
-        await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, {
-            turnCount: session.turnCount + 1,
-            accumulatedScores: newAccumulated
-        }); 
+        const updates = { 
+            turnCount: session.turnCount + 1, 
+            accumulatedScores: newAccumulated 
+        };
+        // Bug 7: Only include currentConceptId when truthy
+        if (targetConcept) {
+            updates.currentConceptId = targetConcept;
+        }
+
+        await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, updates); 
 
         return {
             statusCode: 200,
@@ -218,6 +257,7 @@ exports.handler = async (event) => {
                     accumulatedScores: newAccumulated,
                     nextAIResponse: nextAIResponse,
                     onlyQuestion: onlyQuestion,
+                    currentConceptId: targetConcept,
                     state: INTERVIEW_STATES.AI_SPEAKING,
                     message: 'Turn completed.'
                 }
