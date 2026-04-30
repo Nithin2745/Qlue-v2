@@ -116,7 +116,7 @@ async function postToConnection(connectionId, data) {
       throw new StaleConnectionError(connectionId);
     } else {
       console.error(`Post to connection ${connectionId} failed`, error);
-      return false;
+      throw error;
     }
   }
 }

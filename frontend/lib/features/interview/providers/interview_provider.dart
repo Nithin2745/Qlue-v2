@@ -183,6 +183,12 @@ class InterviewProvider extends ChangeNotifier {
 
     switch (type) {
       case 'tts_audio_chunk':
+        _watchdogTimer?.cancel();
+        _watchdogTimer = Timer(const Duration(seconds: 25), () {
+          debugPrint('Watchdog timer triggered: reconnecting session');
+          _wsClient.send('session_reconnect', {'sessionId': sessionId});
+        });
+
         final base64Data = payload['audioData'] ?? '';
         final isLast = payload['isLast'] == true;
         final chunkIndex = payload['chunkIndex'] as int?;
@@ -205,6 +211,12 @@ class InterviewProvider extends ChangeNotifier {
         break;
 
       case 'session_text_stream':
+        _watchdogTimer?.cancel();
+        _watchdogTimer = Timer(const Duration(seconds: 25), () {
+          debugPrint('Watchdog timer triggered: reconnecting session');
+          _wsClient.send('session_reconnect', {'sessionId': sessionId});
+        });
+
         final streamText = payload?['text'] ?? msg['text'] ?? '';
         final status = payload?['status'] ?? '';
         

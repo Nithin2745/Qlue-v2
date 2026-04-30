@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../constants/app_constants.dart';
 
 enum WebSocketStatus { connecting, connected, disconnected }
@@ -83,8 +84,17 @@ class WebSocketClient {
     Timer(Duration(milliseconds: delay), () async {
       if (_status == WebSocketStatus.disconnected && _lastUrl != null) {
         try {
-          // FIX: Token is already embedded in _lastUrl query string
-          await connect(_lastUrl!, '');
+          // Fetch fresh token before reconnecting
+          final firebaseUser = FirebaseAuth.instance.currentUser;
+          final freshToken = await firebaseUser?.getIdToken(true) ?? '';
+          
+          final uri = Uri.parse(_lastUrl!);
+          final queryParams = Map<String, String>.from(uri.queryParameters);
+          queryParams['token'] = freshToken; // Replace old token with fresh one
+          
+          final updatedUrl = uri.replace(queryParameters: queryParams).toString();
+          
+          await connect(updatedUrl, '');
           
           // After successful reconnect, re-associate with active session
           if (_status == WebSocketStatus.connected && _sessionId != null) {

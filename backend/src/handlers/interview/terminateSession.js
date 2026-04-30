@@ -36,9 +36,9 @@ exports.handler = async (event) => {
         // Ideally, here we trigger Rishi's SNS generation trigger
         const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
         const sns = new SNSClient({});
-        if (process.env.FEEDBACK_TOPIC) {
+        if (process.env.FEEDBACK_TOPIC_ARN) {
             try {
-                await sns.send(new PublishCommand({ TopicArn: process.env.FEEDBACK_TOPIC, Message: JSON.stringify({sessionId}) }));
+                await sns.send(new PublishCommand({ TopicArn: process.env.FEEDBACK_TOPIC_ARN, Message: JSON.stringify({sessionId}) }));
             } catch (e) {
                 console.error("SNS Publish Failed:", e);
             }

@@ -1103,7 +1103,12 @@ Resources:
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
         - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+      Environment:
+        Variables:
+          FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
 
 
   # ========= WEBSOCKET =========
@@ -1141,9 +1146,23 @@ Resources:
       Environment:
         Variables:
           ASYNC_QUEUE_URL: !Ref AsyncInterviewQueue
+          FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
         - Statement: [{ Effect: Allow, Action: ['sqs:SendMessage'], Resource: !GetAtt AsyncInterviewQueue.Arn }]
 
 

@@ -205,10 +205,10 @@ async function buildInitialPrompt(session) {
     const history = transcripts.map(t => ({ role: t.speaker === 'USER' ? 'user' : 'assistant', content: [{ text: t.text }] }));
 
     if (session.moduleType === 'WEBSITE') {
-        const scraped = await fetchAndCleanContent(session.itemData?.websiteUrl);
+        const content = session.itemData?.scrapedSummary || "Website content loaded from context.";
         const concepts = await getConceptsBySession(session.sessionId);
         const targetConcept = concepts.length > 0 ? concepts[0].conceptId : 'General Overview';
-        return buildWebsiteTeachPrompt(targetConcept, scraped.content, history, false);
+        return buildWebsiteTeachPrompt(targetConcept, content, history, false);
     } else {
         let context = "Professional Background";
         if (session.moduleType === 'RESUME') {
@@ -225,9 +225,9 @@ async function buildNextTurnPrompt(session) {
     const history = transcripts.map(t => ({ role: t.speaker === 'USER' ? 'user' : 'assistant', content: [{ text: t.text }] }));
 
     if (session.moduleType === 'WEBSITE') {
-        const scraped = await fetchAndCleanContent(session.itemData?.websiteUrl);
+        const content = session.itemData?.scrapedSummary || "Website content loaded from context.";
         const targetConcept = session.currentConceptId || 'General Overview';
-        return buildWebsiteTeachPrompt(targetConcept, scraped.content, history, true);
+        return buildWebsiteTeachPrompt(targetConcept, content, history, true);
     } else {
         let context = "Professional Background";
         if (session.moduleType === 'RESUME') {

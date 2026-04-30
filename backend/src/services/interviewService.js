@@ -107,8 +107,7 @@ async function processUserTurn(sessionId, textTranscript, isSilence, currentConc
     let targetConcept = null;
     
     if (session.moduleType === 'WEBSITE') {
-        const scraped = await fetchAndCleanContent(session.itemData?.websiteUrl || "");
-        const content = scraped.content;
+        const content = session.itemData?.scrapedSummary || "Website content loaded from context.";
         const concepts = await getConceptsBySession(sessionId);
         targetConcept = currentConceptId || (concepts.length > 0 ? concepts[0].conceptId : "General Overview");
 
