@@ -400,7 +400,6 @@ Resources:
         ThrottlingRateLimit: 10
       ApiId: !Ref WebSocketApi
       DeploymentId: !Ref WebSocketDeployment
-      AutoDeploy: true
 
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -1102,9 +1101,6 @@ Resources:
   SendTextHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      AutoPublishAlias: live
-      ProvisionedConcurrencyConfig:
-        ProvisionedConcurrentExecutions: 1
       Handler: handlers/websocket/sendTextHandler.handler
       CodeUri: src/
       MemorySize: 512
