@@ -48,12 +48,16 @@ async function dispatchToSQS(connectionId, body) {
     const { sessionId } = body.payload || {};
     if (!sessionId) throw new Error('Missing sessionId');
 
+    const session = await getSession(sessionId);
+    if (!session) throw new Error('Session not found');
+
     const command = new SendMessageCommand({
         QueueUrl: QUEUE_URL,
         MessageBody: JSON.stringify({
             type: body.type,
             connectionId,
             sessionId,
+            expectedVersion: session.version,
             text: body.payload.text,
             isSilence: body.payload.isSilence === true,
             currentConceptId: body.payload.currentConceptId,

@@ -265,9 +265,9 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void sendTextTranscript(String text) {
-    // HALF-DUPLEX GUARD: Cannot send if waiting for turn_complete
-    if (_isTurnLocked || isSessionEnded) {
-      debugPrint('Blocked: turn in progress or session ended');
+    // HALF-DUPLEX GUARD: Cannot send while a turn is locked, AI is speaking, or session ended
+    if (_isTurnLocked || currentPhase == InterviewPhase.speaking || isSessionEnded) {
+      debugPrint('Blocked: turn locked, AI speaking, or session ended');
       return;
     }
 

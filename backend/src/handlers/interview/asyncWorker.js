@@ -16,7 +16,7 @@ const SUPPORTED_VOICES = ['Tiffany', 'Matthew', 'Gregory', 'Ivy', 'Joanna', 'Ken
 exports.handler = async (event) => {
     for (const record of event.Records) {
         const body = JSON.parse(record.body);
-        const { connectionId, sessionId, text, isSilence, moduleType, type, currentConceptId } = body;
+        const { connectionId, sessionId, text, isSilence, moduleType, type, currentConceptId, expectedVersion } = body;
         
         console.info(`[AsyncWorker] Processing ${type} for session ${sessionId}`);
 
@@ -24,7 +24,7 @@ exports.handler = async (event) => {
             if (type === 'session_init') {
                 await handleAsyncSessionInit(connectionId, sessionId);
             } else if (type === 'turn_submit') {
-                await handleAsyncUserTurn(connectionId, sessionId, text, isSilence, currentConceptId);
+                await handleAsyncUserTurn(connectionId, sessionId, text, isSilence, currentConceptId, expectedVersion);
             }
         } catch (error) {
             if (error instanceof StaleConnectionError) {
@@ -54,9 +54,27 @@ async function handleAsyncSessionInit(connectionId, sessionId) {
     }
 }
 
-async function handleAsyncUserTurn(connectionId, sessionId, text, isSilence, currentConceptId) {
+async function handleAsyncUserTurn(connectionId, sessionId, text, isSilence, currentConceptId, expectedVersion) {
     const session = await getSession(sessionId);
     if (!session) return;
+
+    if ([INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.PROCESSING_RESPONSE].includes(session.currentState)) {
+        console.warn(`[AsyncWorker] Duplicate or stale turn_submit received for session ${sessionId} in state ${session.currentState}`);
+        return;
+    }
+
+    let claimedSession;
+    try {
+        claimedSession = await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, session.currentState, {
+            expectedVersion: expectedVersion !== undefined ? expectedVersion : session.version
+        });
+    } catch (error) {
+        if (error.name === 'ConditionalCheckFailedException') {
+            console.warn(`[AsyncWorker] Concurrent turn_submit detected for session ${sessionId}; skipping duplicate.`);
+            return;
+        }
+        throw error;
+    }
 
     const result = await processUserTurn(sessionId, text, isSilence, currentConceptId);
 
@@ -71,10 +89,11 @@ async function handleAsyncUserTurn(connectionId, sessionId, text, isSilence, cur
     const nextTurnCount = result.turnCount || postProcessSession.turnCount;
     const nextConceptId = result.currentConceptId || postProcessSession.currentConceptId;
 
-    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, postProcessSession.currentState, {
+    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.PROCESSING_RESPONSE, {
         turnCount: nextTurnCount,
         currentConceptId: nextConceptId,
-        accumulatedScores: result.accumulatedScores
+        accumulatedScores: result.accumulatedScores,
+        expectedVersion: claimedSession.version
     });
 
     let prompt = null;
