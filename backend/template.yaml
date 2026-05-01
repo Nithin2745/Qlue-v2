@@ -21,6 +21,7 @@ Globals:
         NOTIFICATIONS_TABLE: !Ref NotificationsTable
         RESUMES_BUCKET: !Ref ResumesBucket
         SCRAPED_CONTENT_BUCKET: !Ref ScrapedContentBucket
+        AUDIO_BUCKET: !Ref AudioBucket
         FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
         WEBSOCKET_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
         BEDROCK_MODEL_ID: 'nvidia.nemotron-super-3-120b'
@@ -338,6 +339,26 @@ Resources:
           - Id: AutoDelete
             Status: Enabled
             ExpirationInDays: 30
+
+  AudioBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDeleteAudio
+            Status: Enabled
+            ExpirationInDays: 7
 
   # ==============================================================================
   # API GATEWAYS
@@ -1103,6 +1124,7 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
         - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - S3CrudPolicy: { BucketName: !Ref AudioBucket }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
       Environment:
         Variables:
@@ -1160,6 +1182,7 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
         - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - S3CrudPolicy: { BucketName: !Ref AudioBucket }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
         - Statement: [{ Effect: Allow, Action: ['sqs:SendMessage'], Resource: !GetAtt AsyncInterviewQueue.Arn }]
 
