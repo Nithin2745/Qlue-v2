@@ -137,11 +137,11 @@ async function generateAtomicTurn(connectionId, sessionId, prompt, preGeneratedT
         fullText = "I apologize, I didn't generate a response. Let's continue.";
     }
 
-    const audioChunks = [];
+    const audioBuffers = [];
     for await (const chunk of synthesizeToBase64Chunks(fullText, { VoiceId: pollyVoice, Engine: engine })) {
-        audioChunks.push(chunk.audioData);
+        audioBuffers.push(Buffer.from(chunk.audioData, 'base64'));
     }
-    const fullAudioBase64 = audioChunks.join('');
+    const fullAudioBase64 = Buffer.concat(audioBuffers).toString('base64');
 
     let audioUrl = '';
     let audioData = fullAudioBase64;

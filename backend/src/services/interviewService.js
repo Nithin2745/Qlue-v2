@@ -58,14 +58,6 @@ async function processUserTurn(sessionId, textTranscript, isSilence, currentConc
     }
 
     // --- 2. STANDARD PROCESS PIPELINE ---
-    if (session.silenceRetries > 0) {
-        // Transition from SILENCE_DETECTED -> PROCESSING_RESPONSE
-        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, { silenceRetries: 0 });
-    } else {
-        // Normal flow: USER_RESPONDING -> PROCESSING_RESPONSE
-        await transitionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
-    }
-
     if (textTranscript) await saveTranscript(sessionId, session.turnCount, SPEAKERS.USER, textTranscript);
 
     // Scoring
