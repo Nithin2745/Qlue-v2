@@ -24,6 +24,8 @@ Globals:
         FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
         WEBSOCKET_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
         BEDROCK_MODEL_ID: 'nvidia.nemotron-super-3-120b'
+        ALLOWED_VOICES: "Tiffany,Ruth,Joanna,Matthew,Stephen"
+        TRIGGER_FEEDBACK_FUNCTION_NAME: !Ref TriggerFeedbackGenerationFunction
 
 Resources:
   # ==============================================================================
