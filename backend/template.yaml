@@ -382,24 +382,15 @@ Resources:
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: "$request.body.type"
 
-  WebSocketDeployment:
-    Type: AWS::ApiGatewayV2::Deployment
-    DependsOn:
-      - ConnectRoute
-      - DisconnectRoute
-      - DefaultRoute
-    Properties:
-      ApiId: !Ref WebSocketApi
-
   WebSocketStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       StageName: prod
+      AutoDeploy: true
       DefaultRouteSettings:
-        ThrottlingBurstLimit: 20
-        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 200
+        ThrottlingRateLimit: 100
       ApiId: !Ref WebSocketApi
-      DeploymentId: !Ref WebSocketDeployment
 
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -772,6 +763,8 @@ Resources:
               Action:
                 - textract:AnalyzeDocument
                 - textract:DetectDocumentText
+                - textract:StartDocumentAnalysis
+                - textract:GetDocumentAnalysis
               Resource: '*'
         - Statement:
             - Effect: Allow
@@ -1072,6 +1065,44 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
 
+  AsyncInterviewQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 900 # Matches Lambda timeout + buffer
+
+  AsyncInterviewWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers/interview/asyncWorker.handler
+      CodeUri: src/
+      MemorySize: 1024
+      Timeout: 900
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AsyncInterviewQueue.Arn
+            BatchSize: 1
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+      Environment:
+        Variables:
+          FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
+
 
   # ========= WEBSOCKET =========
   ConnectHandlerFunction:
@@ -1103,8 +1134,12 @@ Resources:
     Properties:
       Handler: handlers/websocket/sendTextHandler.handler
       CodeUri: src/
-      MemorySize: 512
-      Timeout: 29
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          ASYNC_QUEUE_URL: !Ref AsyncInterviewQueue
+          FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
@@ -1112,12 +1147,16 @@ Resources:
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
-        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+        - Statement: [{ Effect: Allow, Action: ['sqs:SendMessage'], Resource: !GetAtt AsyncInterviewQueue.Arn }]
 
 
 
@@ -1462,8 +1501,6 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 5
       ComparisonOperator: GreaterThanThreshold
-      AlarmActions:
-        - !Ref FeedbackTriggerTopic
 
   DynamoDBThrottledRequestsAlarm:
     Type: AWS::CloudWatch::Alarm
