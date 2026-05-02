@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 
+enum WebSocketStatus { disconnected, connecting, connected, reconnecting }
+
 class WebSocketClient {
   WebSocketChannel? _channel;
   final String url;
@@ -18,13 +20,15 @@ class WebSocketClient {
       StreamController<void>.broadcast();
 
   Timer? _reconnectTimer;
-  bool _isConnecting = false;
   bool _isConnected = false;
   int _reconnectAttempts = 0;
   static const int maxReconnectAttempts = 5;
   static const Duration reconnectDelay = Duration(seconds: 2);
 
-  Completer<void>? _connectionCompleter;
+  Completer<void>? _connectCompleter;
+  WebSocketStatus _status = WebSocketStatus.disconnected;
+
+  WebSocketStatus get connectionStatus => _status;
 
   WebSocketClient({
     required this.url,
@@ -39,10 +43,12 @@ class WebSocketClient {
   bool get isConnected => _isConnected;
 
   Future<void> connect() async {
-    if (_isConnecting || _isConnected) return;
+    if (_status == WebSocketStatus.connected || _status == WebSocketStatus.connecting) {
+      return;
+    }
 
-    _isConnecting = true;
-    _connectionCompleter = Completer<void>();
+    _status = WebSocketStatus.connecting;
+    _connectCompleter = Completer<void>();
 
     try {
       final uri = Uri.parse(url);
@@ -50,7 +56,7 @@ class WebSocketClient {
 
       await _channel!.ready;
       _isConnected = true;
-      _isConnecting = false;
+      _status = WebSocketStatus.connected;
       _reconnectAttempts = 0;
 
       // Send initial connection message
@@ -67,17 +73,20 @@ class WebSocketClient {
         onDone: _handleDisconnect,
       );
 
-      _connectionCompleter!.complete();
+      if (_connectCompleter != null && !_connectCompleter!.isCompleted) {
+        _connectCompleter!.complete();
+      }
     } catch (e) {
-      _isConnecting = false;
-      _connectionCompleter!.completeError(e);
+      _status = WebSocketStatus.disconnected;
+      _connectCompleter?.completeError(e);
       _scheduleReconnect();
+      rethrow;
     }
   }
 
   Future<void> waitForConnection() async {
-    if (_connectionCompleter != null) {
-      await _connectionCompleter!.future;
+    if (_connectCompleter != null) {
+      await _connectCompleter!.future;
     }
   }
 
@@ -97,6 +106,7 @@ class WebSocketClient {
 
   void _handleDisconnect() {
     _isConnected = false;
+    _status = WebSocketStatus.disconnected;
     _disconnectController.add(null);
     _scheduleReconnect();
   }
@@ -104,6 +114,7 @@ class WebSocketClient {
   void _scheduleReconnect() {
     if (_reconnectAttempts >= maxReconnectAttempts) return;
 
+    _status = WebSocketStatus.reconnecting;
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(
       reconnectDelay * (_reconnectAttempts + 1),
@@ -112,6 +123,25 @@ class WebSocketClient {
         connect();
       },
     );
+  }
+
+  void send(dynamic data) {
+    if (_status != WebSocketStatus.connected || _channel == null) {
+      throw StateError('WebSocket not connected. Status: $_status');
+    }
+
+    if (data is Map<String, dynamic>) {
+      _sendMessage(data);
+    } else if (data is String) {
+      try {
+        final message = jsonDecode(data) as Map<String, dynamic>;
+        _sendMessage(message);
+      } catch (e) {
+        _errorController.add('Invalid send payload: $e');
+      }
+    } else {
+      _errorController.add('Unsupported send payload type: ${data.runtimeType}');
+    }
   }
 
   void sendMessage(Map<String, dynamic> message) {
@@ -136,7 +166,7 @@ class WebSocketClient {
     _channel?.sink.close(status.goingAway);
     _channel = null;
     _isConnected = false;
-    _isConnecting = false;
+    _status = WebSocketStatus.disconnected;
     _disconnectController.add(null);
   }
 

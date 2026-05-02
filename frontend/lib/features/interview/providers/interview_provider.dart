@@ -4,7 +4,7 @@ import '../../../core/network/websocket_client.dart';
 import '../../../shared/services/stt_service.dart';
 import '../../../shared/services/tts_service.dart';
 
-enum InterviewPhase { ready, speaking, listening, processing }
+enum InterviewPhase { ready, speaking, listening, processing, error }
 
 class TranscriptEntry {
   final String role;
@@ -24,6 +24,17 @@ class InterviewProvider extends ChangeNotifier {
   String? audioUrl;
   List<String> transcript = [];
   String? errorMessage;
+  String _selectedVoiceId = 'Tiffany';
+  String _selectedEngine = 'neural';
+
+  String get selectedVoiceId => _selectedVoiceId;
+  String get selectedEngine => _selectedEngine;
+
+  void setVoice(String voiceId, {String engine = 'neural'}) {
+    _selectedVoiceId = voiceId;
+    _selectedEngine = engine;
+    _safeNotify();
+  }
 
   // Additional properties for screen compatibility
   String questionText = "...";
@@ -56,13 +67,22 @@ class InterviewProvider extends ChangeNotifier {
     _wsSubscription = _wsClient.messages.listen(_handleWebSocketMessage);
     _wsClient.errors.listen((error) {
       errorMessage = error;
-      notifyListeners();
+      _safeNotify();
     });
     _wsClient.disconnects.listen((_) {
       isSessionEnded = true;
       _currentPhase = InterviewPhase.ready;
-      notifyListeners();
+      _safeNotify();
     });
+  }
+
+  void _safeNotify() {
+    if (!hasListeners) return;
+    try {
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Safe notify error: $e');
+    }
   }
 
   void _handleWebSocketMessage(Map<String, dynamic> message) {
@@ -70,12 +90,15 @@ class InterviewProvider extends ChangeNotifier {
       case 'turn_complete':
         _handleTurnComplete(message['payload']);
         break;
+      case 'turn_error':
+        _handleTurnError(message['payload']);
+        break;
       case 'termination':
         _handleTermination();
         break;
       case 'error':
         errorMessage = message['payload']['message'];
-        notifyListeners();
+        _safeNotify();
         break;
     }
   }
@@ -87,12 +110,12 @@ class InterviewProvider extends ChangeNotifier {
     subtitleText = questionText;
     audioUrl = payload['audioUrl'];
     _currentPhase = InterviewPhase.speaking;
-    notifyListeners();
+    _safeNotify();
 
     if (audioUrl != null) {
       _ttsService.playUrl(audioUrl!).then((_) {
         _currentPhase = InterviewPhase.listening;
-        notifyListeners();
+        _safeNotify();
         _startListening();
       });
     }
@@ -102,7 +125,13 @@ class InterviewProvider extends ChangeNotifier {
     isSessionEnded = true;
     _currentPhase = InterviewPhase.ready;
     _cleanup();
-    notifyListeners();
+    _safeNotify();
+  }
+
+  void _handleTurnError(Map<String, dynamic> payload) {
+    errorMessage = payload['message'] ?? payload['error'] ?? 'Unknown error';
+    _currentPhase = InterviewPhase.error;
+    _safeNotify();
   }
 
   void _startListening() {
@@ -110,27 +139,29 @@ class InterviewProvider extends ChangeNotifier {
     _sttService.startListening(
       onPartial: (text) {
         partialTranscript = text;
-        notifyListeners();
+        _safeNotify();
       },
       onFinal: (text) {
         finalTranscript = text;
         transcript.add(text);
         isListening = false;
         _submitResponse(text);
-        notifyListeners();
+        _safeNotify();
       },
     );
   }
 
   void _submitResponse(String text) {
     _currentPhase = InterviewPhase.processing;
-    notifyListeners();
+    _safeNotify();
 
     _wsClient.sendMessage({
       'type': 'turn_submit',
       'payload': {
         'sessionId': sessionId,
         'text': text,
+        'voiceId': _selectedVoiceId,
+        'engine': _selectedEngine,
       },
     });
   }
@@ -159,13 +190,13 @@ class InterviewProvider extends ChangeNotifier {
     _currentPhase = InterviewPhase.ready;
     _silenceStrikes = 0;
     errorMessage = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> initSession(String type, {String? resumeId, String? websiteUrl}) async {
     moduleType = type;
     isConnecting = true;
-    notifyListeners();
+    _safeNotify();
 
     // Connect to WebSocket
     try {
@@ -174,15 +205,26 @@ class InterviewProvider extends ChangeNotifier {
     } catch (e) {
       errorMessage = 'Failed to connect: $e';
       isConnecting = false;
-      notifyListeners();
+      _safeNotify();
       return;
     }
 
     // Simulate session initialization
     await Future.delayed(const Duration(seconds: 1));
     sessionId = 'session_${DateTime.now().millisecondsSinceEpoch}';
+    _wsClient.sendMessage({
+      'type': 'session_init',
+      'payload': {
+        'sessionId': sessionId,
+        'moduleType': moduleType,
+        'voiceId': _selectedVoiceId,
+        'engine': _selectedEngine,
+        'resumeId': resumeId,
+        'websiteUrl': websiteUrl,
+      },
+    });
     isConnecting = false;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> endSession() async {
@@ -193,7 +235,7 @@ class InterviewProvider extends ChangeNotifier {
     isSessionEnded = true;
     _cleanup();
 
-    notifyListeners();
+    _safeNotify();
   }
 
   void _cleanup() {
