@@ -1,5 +1,6 @@
 const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 const { deregisterConnection } = require('../../lib/websocket');
 
@@ -164,6 +165,7 @@ async function handleTurnSubmit(connectionId, body, userId) {
       MessageBody: JSON.stringify({
         connectionId,
         sessionId,
+        userId,
         body: { textTranscript, isSilence, currentConceptId },
         action: 'turn_submit',
         voiceId: finalVoiceId,
@@ -193,14 +195,19 @@ async function handleSessionReconnect(connectionId, body, userId) {
 
     // Update connection mapping
     const dynamodb = require('../../lib/dynamodb');
-    await dynamodb.put(WS_CONNECTIONS_TABLE, {
-      connectionId,
-      sessionId,
-      userId,
-      isActive: 'true',
-      connectedAt: Date.now(),
-      ttl: Math.floor(Date.now() / 1000) + (2 * 60 * 60)
-    });
+    await dynamodb.docClient.send(new UpdateCommand({
+      TableName: WS_CONNECTIONS_TABLE,
+      Key: { connectionId },
+      UpdateExpression: 'SET sessionId = :sessionId, userId = :userId, isActive = :active, connectedAt = :connectedAt, #ttl = :ttl',
+      ExpressionAttributeNames: { '#ttl': 'ttl' },
+      ExpressionAttributeValues: {
+        ':sessionId': sessionId,
+        ':userId': userId,
+        ':active': 'true',
+        ':connectedAt': Date.now(),
+        ':ttl': Math.floor(Date.now() / 1000) + (2 * 60 * 60)
+      }
+    }));
 
     if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
       await postToConnection(connectionId, {

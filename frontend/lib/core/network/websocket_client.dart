@@ -26,6 +26,7 @@ class WebSocketClient {
       StreamController<void>.broadcast();
 
   Timer? _reconnectTimer;
+  Timer? _heartbeatTimer;
   bool _isConnected = false;
   int _reconnectAttempts = 0;
   static const int maxReconnectAttempts = 5;
@@ -74,16 +75,11 @@ class WebSocketClient {
       bool wasReconnecting = _reconnectAttempts > 0;
       _reconnectAttempts = 0;
 
+      _startHeartbeat();
+
       if (wasReconnecting) {
         _reconnectController.add(null);
       }
-
-      // Send initial connection message
-      _sendMessage({
-        'type': 'connect',
-        'userId': userId,
-        'sessionId': sessionId,
-      });
 
       // Listen to incoming messages
       _channel!.stream.listen(
@@ -189,8 +185,18 @@ class WebSocketClient {
     }
   }
 
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(Duration(minutes: 5), (_) {
+      if (_isConnected) {
+        sendMessage({'type': 'ping'});
+      }
+    });
+  }
+
   void disconnect() {
     _reconnectTimer?.cancel();
+    _heartbeatTimer?.cancel();
     _channel?.sink.close(status.goingAway);
     _channel = null;
     _isConnected = false;

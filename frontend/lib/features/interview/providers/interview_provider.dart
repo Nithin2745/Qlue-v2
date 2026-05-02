@@ -205,6 +205,7 @@ class InterviewProvider extends ChangeNotifier {
 
   // Additional methods for screen compatibility
   void resetForNewSession() {
+    _cleanup();
     isSessionEnded = false;
     isConnecting = true;
     sessionId = null;
@@ -309,6 +310,7 @@ class InterviewProvider extends ChangeNotifier {
 
     isSessionEnded = true;
     _cleanup();
+    resetForNewSession();
 
     _safeNotify();
   }

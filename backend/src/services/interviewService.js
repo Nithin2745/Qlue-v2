@@ -1,9 +1,8 @@
 const { getSession, updateSessionState } = require('../models/session');
 const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../models/transcript');
-const { transitionState, INTERVIEW_STATES } = require('../handlers/interview/controlTurnFlow');
+const { INTERVIEW_STATES } = require('../handlers/interview/controlTurnFlow');
 const { invokeModel, buildScoringPrompt, buildWebsiteTeachPrompt, buildSelfIntroEvalPrompt } = require('../lib/bedrock');
 const { CONCEPT_STATES, updateConceptState } = require('../models/conceptState');
-const { fetchAndCleanContent } = require('../lib/scraper');
 const { getConceptsBySession } = require('../models/conceptState');
 
 /**

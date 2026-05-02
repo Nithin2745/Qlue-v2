@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
 
 class TtsService {
   final AudioPlayer _player = AudioPlayer();
@@ -24,11 +27,20 @@ class TtsService {
   }
 
   Future<void> playBase64(String base64Data) async {
-    // Implementation for base64 audio data
     await stop();
     _playbackCompleter = Completer<void>();
-    // Add base64 decoding and playback logic here
-    _playbackCompleter!.complete();
+    try {
+      final bytes = base64Decode(base64Data);
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/temp_audio.mp3');
+      await file.writeAsBytes(bytes);
+      await _player.setAudioSource(AudioSource.uri(file.uri));
+      await _player.play();
+      await _player.processingStateStream.firstWhere((s) => s == ProcessingState.completed);
+      _playbackCompleter!.complete();
+    } catch (e) {
+      _playbackCompleter!.completeError(e);
+    }
   }
 
   Future<void> stop() async {

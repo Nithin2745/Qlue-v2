@@ -227,6 +227,11 @@ if (action === 'turn_submit' && session.turnCount > (body.expectedTurnCount || 0
       else if (action === 'turn_submit') {
         const { processUserInput } = require('./processUserInput');
         const processResult = await processUserInput.handler({
+          requestContext: {
+            authorizer: {
+              uid: message.userId
+            }
+          },
           body: JSON.stringify({
             sessionId,
             textTranscript: body.textTranscript,
