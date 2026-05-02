@@ -267,6 +267,11 @@ exports.handler = async (event) => {
   const body = JSON.parse(event.body || '{}');
   const userId = event.requestContext?.authorizer?.uid || body.userId;
 
+  if (!userId) {
+    console.error('WebSocket message missing userId');
+    return await sendError(connectionId, 'userId required');
+  }
+
   console.log(`Received WS message [${body.type || routeKey}] from connection ${connectionId}`);
 
   try {
