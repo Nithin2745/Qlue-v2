@@ -54,7 +54,7 @@ async function generateAtomicTurn({
     
     console.log(`[AtomicTurn] Session ${sessionId} | Turn ${session.turnCount || 0} | Voice: ${voiceId} | Engine: ${engine}`);
 
-    const transcripts = await getTranscriptsBySession(sessionId);
+    const transcripts = await getTranscriptBySession(sessionId);
     const conversationHistory = transcripts.map(t => ({
       speaker: t.speaker,
       text: t.text,
@@ -117,10 +117,11 @@ async function generateAtomicTurn({
         audioUrl = uploadedUrl;
         console.log(`[AtomicTurn] Audio uploaded to S3: ${audioUrl}`);
       } else {
-        console.warn('[AtomicTurn] S3 upload failed, truncating text');
+        console.warn('[AtomicTurn] S3 upload failed, truncating text and using inline audio');
         aiText = aiText.substring(0, 100) + '.';
         const shortAudio = await synthesizeSpeech(aiText, voiceId, engine);
         audioData = shortAudio.audioBase64 || '';
+        audioUrl = ''; // BUG-11 FIX: Explicitly clear audioUrl when using audioData fallback
       }
     } else {
       audioData = audioBase64;
@@ -147,7 +148,7 @@ async function generateAtomicTurn({
 
     await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, null, {
       questionText: aiText,
-      turnCount: (session.turnCount || 0) + 1,
+      incrementTurnCount: true, // BUG-10 FIX: Use atomic increment to prevent duplicate race conditions
       lastVoiceId: voiceId,
       lastEngine: engine
     });

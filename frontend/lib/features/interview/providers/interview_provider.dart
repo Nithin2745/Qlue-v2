@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/constants/api_constants.dart';
@@ -111,10 +112,21 @@ class InterviewProvider extends ChangeNotifier {
     _safeNotify();
 
     if (audioUrl != null) {
-      _ttsService.playUrl(audioUrl!).then((_) {
+      // BUG-8 FIX: Add timeout and error handling for TTS playback
+      _ttsService.playUrl(audioUrl!)
+          .timeout(Duration(seconds: 10), onTimeout: () {
+        throw TimeoutException('Audio playback timed out');
+      })
+          .then((_) {
         _currentPhase = InterviewPhase.listening;
         _safeNotify();
         _startListening();
+      })
+          .catchError((error) {
+        errorMessage = 'Audio playback failed: $error';
+        _currentPhase = InterviewPhase.error;
+        debugPrint('TTS playback error: $error');
+        _safeNotify();
       });
     }
   }
@@ -223,6 +235,18 @@ class InterviewProvider extends ChangeNotifier {
         throw Exception('Invalid sessionId returned from interview init');
       }
     } catch (e) {
+      // BUG-9 FIX: Handle 409 concurrent session response
+      if (e is DioException && e.response?.statusCode == 409) {
+        final activeSessionId = e.response?.data['activeSessionId']?.toString();
+        if (activeSessionId != null && activeSessionId.isNotEmpty) {
+          errorMessage = 'You have an active interview session. Reconnect to it?';
+          // Store the activeSessionId for potential reconnection
+          sessionId = activeSessionId;
+          isConnecting = false;
+          _safeNotify();
+          return;
+        }
+      }
       errorMessage = 'Failed to initialize interview session: $e';
       isConnecting = false;
       _safeNotify();
@@ -230,7 +254,7 @@ class InterviewProvider extends ChangeNotifier {
     }
 
     _wsClient = WebSocketClient(
-      url: 'wss://yofjsacuvf.execute-api.us-east-1.amazonaws.com/prod/',
+      url: ApiConstants.websocketUrl,
       userId: user.uid,
       sessionId: sessionId!,
     );

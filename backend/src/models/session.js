@@ -109,6 +109,13 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         expressionAttributeValues[":turnCount"] = updates.turnCount;
     }
 
+    // BUG-10 FIX: Support atomic increment for turnCount to prevent race conditions
+    if (updates.incrementTurnCount) {
+        updateExpression += ", turnCount = if_not_exists(turnCount, :zero) + :inc";
+        expressionAttributeValues[":zero"] = 0;
+        expressionAttributeValues[":inc"] = 1;
+    }
+
     if (updates.expectedTurnCount !== undefined) {
         if (conditionExpression) {
             conditionExpression += " AND turnCount = :expectedTurnCount";

@@ -52,6 +52,11 @@ async function handleSessionInit(connectionId, body, userId) {
       return await sendError(connectionId, `Session ${sessionId} not found`);
     }
 
+    // BUG-2 FIX: Validate session ownership
+    if (session.userId !== userId) {
+      return await sendError(connectionId, 'Forbidden: Session does not belong to this user', 403);
+    }
+
     const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
     const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');
     const finalEngine = ['neural', 'standard', 'long-form', 'generative'].includes(engine) ? engine : 'neural';
@@ -62,15 +67,33 @@ async function handleSessionInit(connectionId, body, userId) {
       engine: finalEngine
     });
 
+    // BUG-4 FIX: Use UpdateCommand with attribute_not_exists to prevent overwrite race
     const dynamodb = require('../../lib/dynamodb');
-    await dynamodb.put(WS_CONNECTIONS_TABLE, {
-      connectionId,
-      sessionId,
-      userId,
-      isActive: 'true',
-      connectedAt: Date.now(),
-      ttl: Math.floor(Date.now() / 1000) + (2 * 60 * 60)
-    });
+    const { docClient } = require('../../lib/dynamodb');
+    const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+    
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        Key: { connectionId },
+        UpdateExpression: 'SET sessionId = :sessionId, userId = :userId, isActive = :active, connectedAt = :connectedAt, #ttl = :ttl',
+        ConditionExpression: 'attribute_not_exists(connectionId) OR isActive <> :active',
+        ExpressionAttributeNames: { '#ttl': 'ttl' },
+        ExpressionAttributeValues: {
+          ':sessionId': sessionId,
+          ':userId': userId,
+          ':active': 'true',
+          ':connectedAt': Date.now(),
+          ':ttl': Math.floor(Date.now() / 1000) + (2 * 60 * 60)
+        }
+      }));
+    } catch (updateErr) {
+      if (updateErr.name === 'ConditionalCheckFailedException') {
+        console.warn(`Connection ${connectionId} already mapped to different session`);
+      } else {
+        throw updateErr;
+      }
+    }
 
     await sqsClient.send(new SendMessageCommand({
       QueueUrl: ASYNC_QUEUE_URL,
@@ -115,7 +138,20 @@ async function handleTurnSubmit(connectionId, body, userId) {
       return await sendError(connectionId, 'TURN_IN_PROGRESS', 409);
     }
 
-    await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE);
+    // BUG-2 FIX: Validate session ownership
+    if (session.userId !== userId) {
+      return await sendError(connectionId, 'Forbidden: Session does not belong to this user', 403);
+    }
+
+    // BUG-3 FIX: Make state update atomic - only update if currently USER_RESPONDING
+    try {
+      await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.USER_RESPONDING);
+    } catch (stateErr) {
+      if (stateErr.name === 'ConditionalCheckFailedException') {
+        return await sendError(connectionId, 'Session state changed; turn submission cancelled', 409);
+      }
+      throw stateErr;
+    }
 
     const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
     const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');

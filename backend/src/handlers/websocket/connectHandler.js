@@ -40,8 +40,19 @@ exports.handler = async (event) => {
         console.warn('Failed to notify old connection:', notifyError);
       }
 
-      // Deactivate old connection
-      await deactivateConnection(oldConnection.connectionId);
+      // BUG-5 FIX: Use conditional write to prevent race condition
+      // Only deactivate if it's still marked as active (prevent multiple concurrent deactivations)
+      try {
+        await deactivateConnection(oldConnection.connectionId, { 
+          expectedIsActive: 'true' 
+        });
+      } catch (deactivateErr) {
+        if (deactivateErr.name === 'ConditionalCheckFailedException') {
+          console.info(`Old connection ${oldConnection.connectionId} was already deactivated by another request`);
+        } else {
+          console.warn('Failed to deactivate old connection:', deactivateErr);
+        }
+      }
     }
 
     // 3. Register new connection

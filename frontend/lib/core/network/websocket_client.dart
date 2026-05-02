@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 
@@ -11,6 +12,8 @@ class WebSocketClient {
   final String userId;
   final String sessionId;
   final Map<String, String> headers;
+
+  String? _authToken; // BUG-7 FIX: Store token for reconnect
 
   final StreamController<Map<String, dynamic>> _messageController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -51,6 +54,9 @@ class WebSocketClient {
     _connectCompleter = Completer<void>();
 
     try {
+      // BUG-7 FIX: Store authToken for use in reconnect
+      _authToken = authToken;
+      
       // Append Firebase auth token as query param
       final wsUrl = authToken != null && authToken.isNotEmpty
           ? Uri.parse(url).replace(queryParameters: {'token': authToken}).toString()
@@ -122,9 +128,17 @@ class WebSocketClient {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(
       reconnectDelay * (_reconnectAttempts + 1),
-      () {
+      () async {
         _reconnectAttempts++;
-        connect();
+        
+        // BUG-7 FIX: Refresh Firebase token before reconnect
+        try {
+          final newToken = await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          await connect(authToken: newToken);
+        } catch (e) {
+          _errorController.add('Failed to refresh token for reconnect: $e');
+          _scheduleReconnect();
+        }
       },
     );
   }
