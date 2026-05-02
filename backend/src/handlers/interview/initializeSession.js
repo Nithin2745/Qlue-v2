@@ -24,6 +24,14 @@ exports.handler = async (event) => {
         const activeSession = await getActiveSessionForUser(userId);
         if (activeSession) {
             if (body.force) {
+                // Verify the active session belongs to this user before terminating
+                if (activeSession.userId !== userId) {
+                    console.error(`User ${userId} attempted to terminate session owned by ${activeSession.userId}`);
+                    return {
+                        statusCode: 403,
+                        body: JSON.stringify({ error: 'Cannot terminate another user\'s session' })
+                    };
+                }
                 console.info(`Force terminating existing session ${activeSession.sessionId} for ${userId}`);
                 const terminateSession = require('./terminateSession');
                 await terminateSession.handler({
@@ -56,9 +64,13 @@ exports.handler = async (event) => {
         const wsHttpEndpoint = process.env.WEBSOCKET_ENDPOINT || '';
         let wsUrl = '';
         if (wsHttpEndpoint) {
-          wsUrl = wsHttpEndpoint.startsWith('https://') 
-            ? wsHttpEndpoint.replace('https://', 'wss://') 
-            : wsHttpEndpoint;
+          if (wsHttpEndpoint.startsWith('https://')) {
+            wsUrl = wsHttpEndpoint.replace('https://', 'wss://');
+          } else if (wsHttpEndpoint.startsWith('http://')) {
+            wsUrl = wsHttpEndpoint.replace('http://', 'ws://');
+          } else {
+            wsUrl = wsHttpEndpoint;
+          }
         } else {
           wsUrl = process.env.WS_FALLBACK_URL || '';
         }

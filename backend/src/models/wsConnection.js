@@ -46,14 +46,43 @@ async function saveConnection(connectionId, userId, sessionId = null) {
 
 /**
  * Deactivate a connection by ID.
+ * Optional options.expectedIsActive for conditional update to prevent race conditions.
  */
-async function deactivateConnection(connectionId) {
-  return await ddb.update(
-    TABLE_NAME,
-    { connectionId },
-    'SET isActive = :val',
-    { ':val': 'false' }
-  );
+async function deactivateConnection(connectionId, options = {}) {
+  if (options.expectedIsActive) {
+    // BUG-5 FIX: Use conditional write if expectedIsActive is provided
+    const { docClient } = require('../lib/dynamodb');
+    const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+    
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { connectionId },
+        UpdateExpression: 'SET isActive = :val',
+        ConditionExpression: 'isActive = :expected',
+        ExpressionAttributeValues: {
+          ':val': 'false',
+          ':expected': options.expectedIsActive
+        }
+      }));
+      return { success: true };
+    } catch (error) {
+      if (error.name === 'ConditionalCheckFailedException') {
+        // Connection is no longer in the expected state
+        throw error;
+      }
+      console.error(`DDB UPDATE Error | ${TABLE_NAME}`, error);
+      return { success: false, error };
+    }
+  } else {
+    // Default non-conditional deactivation
+    return await ddb.update(
+      TABLE_NAME,
+      { connectionId },
+      'SET isActive = :val',
+      { ':val': 'false' }
+    );
+  }
 }
 
 /**

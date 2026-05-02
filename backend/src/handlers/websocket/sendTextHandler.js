@@ -1,719 +1,340 @@
-const { getSession, INTERVIEW_STATES, updateSessionState } = require('../../models/session');
-const { postToConnection } = require('../../lib/websocket');
-const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../../models/transcript');
-const { pushStateUpdate } = require('./stateUpdateHandler');
-
-// Handlers
-const generateQuestion = require('../interview/generateQuestion');
-const processUserInput = require('../interview/processUserInput');
-const terminateSession = require('../interview/terminateSession');
-const { synthesizeToBase64Chunks } = require('../../lib/polly');
-const { invokeModelStream, buildInterviewPrompt, buildTutorPrompt, buildWebsiteTeachPrompt } = require('../../lib/bedrock');
-const { getResumeById } = require('../../models/resume');
-const { getUserById } = require('../../models/user');
-const { transitionState } = require('../interview/controlTurnFlow');
-const { associateSession } = require('../../models/wsConnection');
-const { fetchAndCleanContent } = require('../../lib/scraper');
-const { getConceptsBySession } = require('../../models/conceptState');
-
-
-// Supported engine voices
-const SUPPORTED_VOICES = [
-    'Tiffany', 'Matthew', 'Gregory', 'Ivy', 'Joanna', 'Kendra', 
-    'Kimberly', 'Salli', 'Joey', 'Justin', 'Kevin', 'Patrick', 
-    'Stephen', 'Ruth'
-];
-
-/**
- * AWS Lambda Handler for WebSocket $default route.
- * Dispatches messages based on the 'type' field in the body.
- */
-exports.handler = async (event) => {
-    const connectionId = event.requestContext.connectionId;
-    const body = JSON.parse(event.body || '{}');
-    const type = body.type;
-
-    console.info(`Received WS message [${type}] from connection ${connectionId}`);
-
-    try {
-        switch (type) {
-            case 'session_init':
-                return await handleSessionInit(connectionId, body);
-            case 'text_transcript':
-                return await handleTextTranscript(connectionId, body);
-            case 'silence_detected':
-                return await handleSilenceDetected(connectionId, body);
-            case 'session_reconnect':
-                return await handleSessionReconnect(connectionId, body);
-            case 'terminate_session':
-                return await handleTerminateSession(connectionId, body);
-            case 'ping':
-                await postToConnection(connectionId, { type: 'pong' });
-                return { statusCode: 200 };
-            default:
-
-                console.warn(`Unhandled message type: ${type}`);
-                return { statusCode: 200, body: 'Type not handled' };
-        }
-    } catch (error) {
-        console.error('WebSocket message processing failed:', error);
-        
-        // FIX 4: RECOVER: Don't leave session stuck in PROCESSING_RESPONSE
-        try {
-            const { sessionId } = body.payload || {};
-            if (sessionId) {
-                const session = await getSession(sessionId);
-                if (session && session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE) {
-                    await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING, null, {});
-                    await pushStateUpdate(connectionId, sessionId, 
-                        INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.USER_RESPONDING,
-                        session.turnCount, "Please try again.");
-                }
-            }
-        } catch (recoveryError) {
-            console.error('State recovery failed:', recoveryError);
-        }
-
-        await postToConnection(connectionId, {
-            type: 'error',
-            payload: { message: 'Failed to process message: ' + error.message }
-        });
-        return { statusCode: 500 };
-    }
-};
-
-/**
- * Orchestrates a streaming AI response:
-
- * 1. Streams text from Bedrock
- * 2. Buffers sentences
- * 3. Starts synthesis (Polly) as soon as a sentence is complete
- * 4. Pushes results to WebSocket connection
- */
-async function streamAIResponse(connectionId, sessionId, session, moduleType, prompt) {
-    const pollyVoice = SUPPORTED_VOICES.includes(session.voiceId) ? session.voiceId : 'Tiffany';
-    let fullText = "";
-    let sentenceBuffer = "";
-    let globalAudioChunkIndex = 0;
-
-    // Buffer for sending partial text updates to avoid flooding WS
-    let textRefreshTimer = null;
-    const sendPartialText = async (text) => {
-        await postToConnection(connectionId, {
-            type: 'session_text_stream',
-            payload: { text }
-        });
-    };
-
-    let lastProcessPromise = Promise.resolve();
-
-    const processSentence = async (sentence) => {
-        let cleanSentence = sentence;
-        try {
-            const parsed = JSON.parse(sentence);
-            if (parsed.question) cleanSentence = parsed.question;
-            else if (parsed.response) cleanSentence = parsed.response;
-        } catch (e) {
-            // Fallback to regex for non-JSON responses
-            cleanSentence = sentence
-                .replace(/^\s*\{\s*"(question|response)"\s*:\s*"/, '')
-                .replace(/"\s*\}\s*$/, '')
-                .replace(/\\"/g, '"')
-                .trim();
-        }
-
-        if (!cleanSentence) return;
-
-        lastProcessPromise = lastProcessPromise.then(async () => {
-            try {
-                const engine = session.itemData?.engine || 'generative';
-                for await (const audioChunk of synthesizeToBase64Chunks(cleanSentence, { VoiceId: pollyVoice, Engine: engine })) {
-                    await postToConnection(connectionId, {
-                        type: 'tts_audio_chunk',
-                        payload: {
-                            chunkIndex: globalAudioChunkIndex++,
-                            audioData: audioChunk.audioData,
-                            isLast: false
-                        }
-                    });
-                }
-            } catch (err) {
-                console.error('Sentence processing failed:', err);
-                // Notify frontend that audio synthesis failed for this sentence
-                await postToConnection(connectionId, {
-                    type: 'error',
-                    payload: {
-                        message: 'Audio synthesis failed: ' + err.message,
-                        code: 'TTS_ERROR'
-                    }
-                });
-                // Re-throw so the outer streamAIResponse catch can handle it
-                throw err;
-            }
-        });
-        return lastProcessPromise;
-    };
-
-    const voiceName = session.voiceId || 'Tiffany';
-    const intros = {
-        'RESUME': `Hello! I'm ${voiceName}. I've analyzed your resume, and I'm ready to start your technical interview. Let's begin.`,
-        'WEBSITE': `Hi there! I'm ${voiceName}, your mentor. I've reviewed the website content you provided, and I'm excited to help you learn. Here's my first question.`,
-        'HR': `Hello! I'm ${voiceName} from the recruiting team. I'll be conducting your behavioral interview today. Let's get started.`,
-        'INTRO': `Hello! I'm ${voiceName}, your AI interviewer. Let's work on perfecting your self-introduction and elevator pitch. Ready when you are!`,
-    };
-
-    try {
-        console.info(`[Stream] Starting Bedrock invocation for module: ${moduleType}`);
-        
-        // Notify client that AI is preparing to speak
-        await postToConnection(connectionId, {
-            type: 'session_text_stream',
-            payload: { text: "", status: "thinking" }
-        });
-
-        // LATENCY HIDING: If this is the start of the session, send an immediate intro
-        // while Bedrock is generating the first question.
-        if (session.turnCount === 0) {
-            const introText = intros[moduleType] || `Hello! I'm ${voiceName}, your AI interviewer. Let's begin our session.`;
-            
-            // FIX 2: Add intro to fullText so frontend sees it, but NOT to sentenceBuffer
-            // to prevent processing it again during the Bedrock stream.
-            fullText += introText + " ";
-
-            console.debug(`[Stream] Sending instant intro to hide latency.`);
-            await processSentence(introText);
-            sentenceBuffer = ""; // Ensure clean buffer for stream tokens
-        }
-
-        await invokeModelStream(undefined, prompt, async (token) => {
-            fullText += token;
-            sentenceBuffer += token;
-
-            // Only split on full sentence boundaries to avoid choppy speech
-            const isFullBoundary = /[.!?](\s|$)/.test(sentenceBuffer) && sentenceBuffer.trim().length >= 20;
-
-            if (isFullBoundary) {
-                const sentenceToProcess = sentenceBuffer;
-                sentenceBuffer = ""; 
-                console.debug(`[Stream] Sentence boundary detected, processing: "${sentenceToProcess.substring(0, 30)}..."`);
-                await processSentence(sentenceToProcess);
-            }
-
-            if (!textRefreshTimer) {
-                textRefreshTimer = setTimeout(() => {
-                    postToConnection(connectionId, {
-                        type: 'session_text_stream',
-                        payload: { text: fullText }
-                    });
-                    textRefreshTimer = null;
-                }, 200);
-            }
-        });
-
-        console.info(`[Stream] Bedrock stream finished. Total text length: ${fullText.length}`);
-
-        if (sentenceBuffer.trim()) {
-            console.debug(`[Stream] Processing final fragment: "${sentenceBuffer.substring(0, 30)}..."`);
-            await processSentence(sentenceBuffer);
-        }
-
-        console.info(`[Stream] Awaiting final background synthesis...`);
-        await lastProcessPromise;
-
-        // Send the final question text (not a state update to avoid duplicate transitions)
-        // Bug 11: Save AI question to transcript for conversation history
-        // FIX 3: Only save the actual question, not the system-generated intro
-        const introText = intros[moduleType];
-        const transcriptText = (session.turnCount === 0 && introText)
-            ? fullText.replace(introText, "").trim() || fullText
-            : fullText;
-
-        await saveTranscript(sessionId, session.turnCount, SPEAKERS.AI, transcriptText);
-
-        await postToConnection(connectionId, {
-            type: 'question_text_update',
-            payload: {
-                sessionId,
-                turnIndex: session.turnCount,
-                questionText: fullText,
-                currentConceptId: session.currentConceptId,
-                timestamp: Date.now()
-            }
-        });
-
-        // Persist the final question text to DynamoDB so reconnects can restore it
-        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
-            questionText: fullText,
-        });
-
-        // FINAL SIGNAL: Send an empty chunk with isLast:true to signal completion.
-        // This MUST reach the TTS service so it fires onPlaybackComplete.
-        await postToConnection(connectionId, {
-            type: 'tts_audio_chunk',
-            payload: {
-                audioData: '',
-                isLast: true
-            }
-        });
-
-        await postToConnection(connectionId, {
-            type: 'ai_speaking_complete',
-            payload: { sessionId, turnIndex: session.turnCount }
-        });
-
-
-        console.info(`[Stream] Sequential processing complete.`);
-
-        return fullText;
-    } catch (error) {
-        console.error('Streaming Response Failed:', error);
-        
-        // Bug 7: Transition to ERROR state so session isn't stuck in AI_SPEAKING
-        try {
-            await updateSessionState(sessionId, INTERVIEW_STATES.ERROR, null, {
-                terminationReason: 'STREAMING_ERROR: ' + error.message
-            });
-        } catch (stateError) {
-            console.error('Failed to transition to ERROR state:', stateError);
-        }
-
-        // Notify the client of the failure so they don't stay in a hanging state
-        await postToConnection(connectionId, {
-            type: 'error',
-            payload: { 
-                message: 'AI response failed. Please try again.',
-                code: 'STREAMING_ERROR'
-            }
-        });
-
-        throw error;
-    }
-}
-
-
-async function handleSessionInit(connectionId, body) {
-    const { sessionId, moduleType } = body.payload || {};
-    if (!sessionId) throw new Error('Missing sessionId');
-
-    const session = await getSession(sessionId);
-    if (!session) throw new Error('Session not found');
-
-    if (moduleType && session.moduleType !== moduleType) {
-        await postToConnection(connectionId, {
-            type: 'error',
-            payload: { message: 'MODULE_MISMATCH', code: 'MODULE_MISMATCH' }
-        });
-        throw new Error('MODULE_MISMATCH');
-    }
-
-    // Associate this connection with the session for reconnect support
-    await associateSession(connectionId, sessionId);
-
-    const userId = session.userId;
-    const transcripts = await getTranscriptBySession(sessionId);
-    const history = transcripts.map(t => ({
-        role: t.speaker === 'USER' ? 'user' : 'assistant',
-        content: [{ text: t.text }]
-    }));
-
-    // Build Prompt
-    let prompt = [];
-    if (session.moduleType === 'WEBSITE') {
-        // Bug 4: Scrape actual content and use buildWebsiteTeachPrompt
-        const websiteUrl = session.itemData?.websiteUrl;
-        let content = 'No content available.';
-        try {
-            const scraped = await fetchAndCleanContent(websiteUrl);
-            content = scraped.content;
-        } catch (e) {
-            console.warn('[SessionInit] Failed to scrape website content:', e.message);
-        }
-        const concepts = await getConceptsBySession(sessionId);
-        const targetConcept = concepts.length > 0 ? concepts[0].conceptId : 'General Overview';
-        
-        // FIX 6: Save currentConceptId on WEBSITE init
-        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, { 
-            currentConceptId: targetConcept 
-        });
-
-        prompt = buildWebsiteTeachPrompt(targetConcept, content, history, false);
-    } else {
-        let context = "Professional Background";
-        if (session.moduleType === 'RESUME') {
-            let resumeId = session.itemData?.resumeId;
-            if (!resumeId) {
-                const user = await getUserById(userId);
-                resumeId = user.activeResumeId;
-            }
-            const resume = await getResumeById(resumeId);
-            context = resume?.parsedData || context;
-        }
-        prompt = buildInterviewPrompt(context, history, 0, session.moduleType);
-    }
-
-    // FIX Bug 7+D: Use transitionState for validated transition (INITIALIZING → AI_SPEAKING)
-    await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, {
-        turnCount: session.turnCount || 0
-    });
-
-    // Push state update to transition UI
-    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.INITIALIZING, INTERVIEW_STATES.AI_SPEAKING, 0, "...");
-
-    // Stream the response
-    await streamAIResponse(connectionId, sessionId, session, session.moduleType, prompt);
-
-    // Transition to USER_RESPONDING so the user can speak
-    await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
-    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, 0, "Your turn to respond.");
-
-    return { statusCode: 200 };
-}
-
-async function handleTextTranscript(connectionId, body) {
-  const { sessionId, text } = body.payload || {};
-
-  if (!sessionId || !text) throw new Error('Missing sessionId or text');
-
-  const session = await getSession(sessionId);
-  if (!session) throw new Error('Session not found');
-
-  // BUG 9: Guard against zombie/terminated sessions
-  if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
-    await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
-    return { statusCode: 200 };
-  }
-
-  // FIX 3: Defense: Reject if AI is still speaking (race condition protection)
-  if (session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
-    console.warn(`[Barge-In] Ignored transcript from session ${sessionId} as AI is speaking.`);
-    // Silently drop the transcript to enforce professional interview dynamics.
-    // Do NOT send a type: 'error' to the frontend, as it will kill the active TTS stream.
-    return { statusCode: 200 };
-  }
-
-  // 2. Call business logic (NO state transition here)
-  const processRes = await processUserInput.handler({ 
-    body: JSON.stringify({ 
-      sessionId, 
-      textTranscript: text,
-      currentConceptId: body.payload?.currentConceptId // Bug 9: Pass through for WEBSITE mode
-    }) 
-  });
-
-  // 3. Handle failure gracefully
-  if (processRes.statusCode !== 200) {
-    const errorBody = JSON.parse(processRes.body);
-    const errMsg = errorBody.error || errorBody.message || 'Processing failed';
-    
-    // FIX: Suppress double-submit / race-condition errors so they don't kill the active UI
-    if (processRes.statusCode === 409 || errMsg.includes('transition') || errMsg.includes('state')) {
-      console.warn(`[Double-Submit Guard] Suppressed error to UI: ${errMsg}`);
-      return { statusCode: 200 }; 
-    }
-
-    // Push actual fatal errors to client
-    await postToConnection(connectionId, { 
-      type: 'error', 
-      payload: { message: errMsg } 
-    });
-    return { statusCode: 200 }; // Handled
-  }
-
-  // 4. Extract data safely
-  const processBody = JSON.parse(processRes.body);
-  const data = processBody.data || processBody; 
-  const nextAIResponse = data.nextAIResponse;
-  const onlyQuestion = data.onlyQuestion || nextAIResponse;
-
-  // Refresh session from DB to get the most up-to-date state (turnCount, scores)
-  const updatedSession = await getSession(sessionId);
-
-  // 4. Handle pre-generated responses (silence retry, deadlock recovery)
-  if (data.silenceRetries || data.message?.includes('Deadlock') || data.message?.includes('Silence')) {
-    // FIX: Transition DB to AI_SPEAKING before streaming to satisfy state machine
-    await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING);
-    
-    await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, nextAIResponse);
-    
-    await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
-    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
-    
-    return { statusCode: 200 };
-  }
-
-  // Only require nextAIResponse for WEBSITE/INTRO modes where processUserInput generates it
-  if (session.moduleType !== 'RESUME' && session.moduleType !== 'HR' && !nextAIResponse) {
-    throw new Error('No AI response generated');
-  }
-
-  // Bug 2: For WEBSITE and INTRO, if nextAIResponse was pre-generated, use it directly
-  if (nextAIResponse && (session.moduleType === 'WEBSITE' || session.moduleType === 'INTRO')) {
-    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is speaking.");
-    
-    // FIX: Transition DB to AI_SPEAKING before streaming to satisfy state machine
-    await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING);
-    
-    await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, nextAIResponse);
-    
-    await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
-    await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
-    
-    return { statusCode: 200 };
-  }
-
-  // 5. Build prompt for streaming
-  // We need to rebuild history AFTER processUserInput saved the new transcript
-  const transcripts = await getTranscriptBySession(sessionId);
-  const history = transcripts.map(t => ({
-    role: t.speaker === 'USER' ? 'user' : 'assistant',
-    content: [{ text: t.text }]
-  }));
-
-  let prompt = [];
-  if (session.moduleType === 'WEBSITE') {
-    // Bug 4: Scrape actual content and use buildWebsiteTeachPrompt
-    const websiteUrl = session.itemData?.websiteUrl;
-    let content = 'No content available.';
-    try {
-        const scraped = await fetchAndCleanContent(websiteUrl);
-        content = scraped.content;
-    } catch (e) {
-        console.warn('[TextTranscript] Failed to scrape website content:', e.message);
-    }
-    const concepts = await getConceptsBySession(sessionId);
-    const targetConcept = (concepts.length > 0 ? concepts[0].conceptId : 'General Overview');
-    prompt = buildWebsiteTeachPrompt(targetConcept, content, history, true);
-  } else {
-    let context = "Professional Background";
-    if (session.moduleType === 'RESUME') {
-      let resumeId = session.itemData?.resumeId;
-      if (!resumeId) {
-        const user = await getUserById(session.userId);
-        resumeId = user.activeResumeId;
-      }
-      const resume = await getResumeById(resumeId);
-      context = resume?.parsedData || context;
-    }
-    prompt = buildInterviewPrompt(context, history, session.turnCount + 1, session.moduleType);
-  }
-
-  // 6. Push state and stream response
-  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.USER_RESPONDING, INTERVIEW_STATES.AI_SPEAKING, updatedSession.turnCount, "AI is generating next question.");
-
-  // FIX: Lock DB into AI_SPEAKING to activate Barge-In guards during the 20-second stream
+const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
+const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
+const { deregisterConnection } = require('../../lib/websocket');
+
+const sqsClient = new SQSClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const ASYNC_QUEUE_URL = process.env.ASYNC_QUEUE_URL;
+const WS_CONNECTIONS_TABLE = process.env.WS_CONNECTIONS_TABLE;
+
+const apigwClient = new ApiGatewayManagementApiClient({
+  endpoint: process.env.WEBSOCKET_ENDPOINT?.replace('wss://', 'https://') || ''
+});
+
+async function postToConnection(connectionId, data) {
   try {
-    await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING);
+    await apigwClient.send(new PostToConnectionCommand({
+      ConnectionId: connectionId,
+      Data: Buffer.from(JSON.stringify(data))
+    }));
+    return true;
   } catch (error) {
-    if (error.message && error.message.includes("AI_SPEAKING -> AI_SPEAKING")) {
-      console.warn(`[Concurrent Duplicate] Suppressed duplicate transcript state transition: ${error.message}`);
-      return { statusCode: 200 };
+    if (error.$metadata?.httpStatusCode === 410 || error.name === 'GoneException') {
+      console.warn(`Connection ${connectionId} is stale`);
+      await deregisterConnection(connectionId);
+      throw new Error('StaleConnectionError');
     }
     throw error;
   }
-
-  await streamAIResponse(connectionId, sessionId, updatedSession, session.moduleType, prompt);
-
-  await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
-  await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn to respond.");
-
-  return { statusCode: 200 };
 }
 
-/**
- * Helper to stream pre-generated text (silence retries, etc) via TTS without Bedrock
- */
-async function streamPreGeneratedResponse(connectionId, sessionId, session, text) {
-    const pollyVoice = SUPPORTED_VOICES.includes(session.voiceId) ? session.voiceId : 'Tiffany';
-    const engine = session.itemData?.engine || 'generative';
-    
-    // Bug 4: Save AI response to transcripts for conversation history
-    await saveTranscript(sessionId, session.turnCount, SPEAKERS.AI, text);
-    
-    // Stream text
+async function sendError(connectionId, message, code = 400) {
+  try {
     await postToConnection(connectionId, {
-      type: 'session_text_stream',
-      payload: { text }
+      type: 'turn_error',
+      payload: { error: message, code, timestamp: Date.now() }
     });
+  } catch (e) {
+    console.error('Failed to send error:', e);
+  }
+}
+
+async function handleSessionInit(connectionId, body, userId) {
+  const { sessionId, moduleType, resumeId, websiteUrl, voiceId, engine } = body;
+
+  if (!sessionId) {
+    return await sendError(connectionId, 'sessionId is required for session_init');
+  }
+
+  try {
+    const session = await getSessionById(sessionId);
+    if (!session) {
+      return await sendError(connectionId, `Session ${sessionId} not found`);
+    }
+
+    // BUG-2 FIX: Validate session ownership
+    if (session.userId !== userId) {
+      return await sendError(connectionId, 'Forbidden: Session does not belong to this user', 403);
+    }
+
+    const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
+    const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');
+    const finalEngine = ['neural', 'standard', 'long-form', 'generative'].includes(engine) ? engine : 'neural';
+
+    await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, null, {
+      connectionId,
+      voiceId: finalVoiceId,
+      engine: finalEngine
+    });
+
+    // BUG-4 FIX: Use UpdateCommand with attribute_not_exists to prevent overwrite race
+    const dynamodb = require('../../lib/dynamodb');
+    const { docClient } = require('../../lib/dynamodb');
+    const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
     
-    // Synthesize TTS
-    let chunkIndex = 0;
-    for await (const audioChunk of synthesizeToBase64Chunks(text, { VoiceId: pollyVoice, Engine: engine })) {
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: WS_CONNECTIONS_TABLE,
+        Key: { connectionId },
+        UpdateExpression: 'SET sessionId = :sessionId, userId = :userId, isActive = :active, connectedAt = :connectedAt, #ttl = :ttl',
+        ConditionExpression: 'attribute_not_exists(connectionId) OR isActive = :active',
+        ExpressionAttributeNames: { '#ttl': 'ttl' },
+        ExpressionAttributeValues: {
+          ':sessionId': sessionId,
+          ':userId': userId,
+          ':active': 'true',
+          ':connectedAt': Date.now(),
+          ':ttl': Math.floor(Date.now() / 1000) + (2 * 60 * 60)
+        }
+      }));
+    } catch (updateErr) {
+      if (updateErr.name === 'ConditionalCheckFailedException') {
+        console.warn(`Connection ${connectionId} already mapped to different session`);
+      } else {
+        throw updateErr;
+      }
+    }
+
+    await sqsClient.send(new SendMessageCommand({
+      QueueUrl: ASYNC_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        connectionId,
+        sessionId,
+        action: 'session_init',
+        voiceId: finalVoiceId,
+        engine: finalEngine
+      })
+    }));
+
+    console.log(`[session_init] Queued for ${sessionId} with voice ${finalVoiceId}`);
+
+  } catch (err) {
+    console.error('session_init error:', err);
+    await sendError(connectionId, err.message);
+  }
+}
+
+async function handleTurnSubmit(connectionId, body, userId) {
+  const { sessionId, textTranscript, isSilence, currentConceptId, voiceId, engine } = body;
+
+  if (!sessionId) {
+    return await sendError(connectionId, 'sessionId is required for turn_submit');
+  }
+
+  try {
+    const session = await getSessionById(sessionId);
+
+    if (!session || session.currentState === INTERVIEW_STATES.TERMINATED) {
+      return await sendError(connectionId, 'Session is terminated');
+    }
+    if (session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
+      await postToConnection(connectionId, { 
+        type: 'termination', 
+        payload: { sessionId, reason: 'GENERATING_FEEDBACK' }
+      });
+      return;
+    }
+    if (session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE || session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
+      return await sendError(connectionId, 'TURN_IN_PROGRESS', 409);
+    }
+
+    // BUG-2 FIX: Validate session ownership
+    if (session.userId !== userId) {
+      return await sendError(connectionId, 'Forbidden: Session does not belong to this user', 403);
+    }
+
+    // BUG-3 FIX: Make state update atomic - only update if currently USER_RESPONDING
+    try {
+      await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.USER_RESPONDING);
+    } catch (stateErr) {
+      if (stateErr.name === 'ConditionalCheckFailedException') {
+        return await sendError(connectionId, 'Session state changed; turn submission cancelled', 409);
+      }
+      throw stateErr;
+    }
+
+    const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
+    const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');
+    const finalEngine = ['neural', 'standard', 'long-form', 'generative'].includes(engine) ? engine : (session.engine || 'neural');
+
+    console.log(`[turn_submit] Session ${sessionId} | Voice: ${finalVoiceId} | Engine: ${finalEngine}`);
+
+    await sqsClient.send(new SendMessageCommand({
+      QueueUrl: ASYNC_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        connectionId,
+        sessionId,
+        body: { textTranscript, isSilence, currentConceptId },
+        action: 'turn_submit',
+        voiceId: finalVoiceId,
+        engine: finalEngine,
+        expectedTurnCount: session.turnCount || 0
+      })
+    }));
+
+  } catch (err) {
+    console.error('turn_submit error:', err);
+    await sendError(connectionId, err.message);
+  }
+}
+
+async function handleSessionReconnect(connectionId, body, userId) {
+  const { sessionId } = body;
+  
+  if (!sessionId) {
+    return await sendError(connectionId, 'sessionId required');
+  }
+
+  try {
+    const session = await getSessionById(sessionId);
+    if (!session) {
+      return await sendError(connectionId, 'Session not found');
+    }
+
+    // Update connection mapping
+    const dynamodb = require('../../lib/dynamodb');
+    await dynamodb.put(WS_CONNECTIONS_TABLE, {
+      connectionId,
+      sessionId,
+      userId,
+      isActive: 'true',
+      connectedAt: Date.now(),
+      ttl: Math.floor(Date.now() / 1000) + (2 * 60 * 60)
+    });
+
+    if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
       await postToConnection(connectionId, {
-        type: 'tts_audio_chunk',
-        payload: { chunkIndex: chunkIndex++, audioData: audioChunk.audioData, isLast: false }
+        type: 'termination',
+        payload: { sessionId, reason: session.currentState }
+      });
+      return;
+    }
+
+    // If stuck in AI_SPEAKING/PROCESSING for >30s, recover
+    const staleThreshold = 30000;
+    const isStale = session.updatedAt && (Date.now() - session.updatedAt > staleThreshold);
+    
+    if (isStale && (session.currentState === INTERVIEW_STATES.AI_SPEAKING || session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE)) {
+      await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
+      await postToConnection(connectionId, {
+        type: 'turn_complete',
+        payload: {
+          sessionId,
+          turnIndex: session.turnCount || 0,
+          questionText: session.questionText || 'Welcome back. Please respond when ready.',
+          audioData: '',
+          audioUrl: '',
+          state: INTERVIEW_STATES.USER_RESPONDING,
+          timestamp: Date.now()
+        }
+      });
+      return;
+    }
+
+    // Normal reconnect: send current state
+    if (session.currentState === INTERVIEW_STATES.USER_RESPONDING && session.questionText) {
+      await postToConnection(connectionId, {
+        type: 'turn_complete',
+        payload: {
+          sessionId,
+          turnIndex: session.turnCount || 0,
+          questionText: session.questionText,
+          audioData: '',
+          audioUrl: '',
+          state: INTERVIEW_STATES.USER_RESPONDING,
+          timestamp: Date.now()
+        }
+      });
+    } else {
+      await postToConnection(connectionId, {
+        type: 'turn_complete',
+        payload: {
+          sessionId,
+          turnIndex: session.turnCount || 0,
+          questionText: 'Welcome back. Please respond when ready.',
+          audioData: '',
+          audioUrl: '',
+          state: INTERVIEW_STATES.USER_RESPONDING,
+          timestamp: Date.now()
+        }
       });
     }
-    
-    // Final signals
-    await postToConnection(connectionId, {
-      type: 'tts_audio_chunk',
-      payload: { audioData: '', isLast: true }
-    });
-    
-    await postToConnection(connectionId, {
-      type: 'ai_speaking_complete',
-      payload: { sessionId, turnIndex: session.turnCount }
-    });
-    
-    // Send finalized question text (no state transition to avoid duplicates)
-    await postToConnection(connectionId, {
-      type: 'question_text_update',
-      payload: {
-        sessionId,
-        turnIndex: session.turnCount,
-        questionText: text,
-        currentConceptId: session.currentConceptId,
-        timestamp: Date.now()
-      }
-    });
+
+  } catch (err) {
+    console.error('session_reconnect error:', err);
+    await sendError(connectionId, err.message);
+  }
 }
 
+async function handleTerminateSession(connectionId, body, userId) {
+  const { sessionId, reason = 'USER_INITIATED' } = body;
 
-/**
- * Handles silence_detected events from the frontend.
- * Routes through processUserInput with isSilence flag for retry/termination logic.
- */
-async function handleSilenceDetected(connectionId, body) {
-    const { sessionId } = body.payload || {};
-    if (!sessionId) throw new Error('Missing sessionId');
+  if (!sessionId) {
+    return await sendError(connectionId, 'sessionId required');
+  }
 
-    const processRes = await processUserInput.handler({
-        body: JSON.stringify({ sessionId, isSilence: true })
-    });
-
-    if (processRes.statusCode !== 200) {
-        const errorBody = JSON.parse(processRes.body);
-        await postToConnection(connectionId, {
-            type: 'error',
-            payload: { message: errorBody.error || 'Silence processing failed' }
-        });
-        return { statusCode: 200 };
-    }
-
-    const processBody = JSON.parse(processRes.body);
-    const data = processBody.data;
-
-    // Check for termination (3rd silence strike)
-    if (data.state === 'TERMINATED' || data.reason === 'SILENCE_TIMEOUT') {
-        await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
-        return { statusCode: 200 };
-    }
-
-    const updatedSession = await getSession(sessionId);
-
-    if (data.silenceRetries || data.message?.includes('Silence')) {
-        // FIX: Transition DB to AI_SPEAKING before streaming to satisfy state machine
-        await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING);
-        
-        await streamPreGeneratedResponse(connectionId, sessionId, updatedSession, data.nextAIResponse);
-        await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
-        await pushStateUpdate(connectionId, sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING, updatedSession.turnCount, "Your turn.");
-    }
-
-    return { statusCode: 200 };
-}
-
-
-/**
- * Handles session_reconnect after a WebSocket connection drops and re-establishes.
- * Re-associates the new connection with the existing session and pushes current state.
- */
-async function handleSessionReconnect(connectionId, body) {
-    const { sessionId } = body.payload || {};
-    if (!sessionId) throw new Error('Missing sessionId');
-
-    const session = await getSession(sessionId);
-    if (!session) {
-        await postToConnection(connectionId, {
-            type: 'error',
-            payload: { message: 'Session not found for reconnect', code: 'SESSION_NOT_FOUND' }
-        });
-        return { statusCode: 200 };
-    }
-
-    // Re-associate this new connection ID with the session
-    await associateSession(connectionId, sessionId);
-
-    console.info(`[Reconnect] Connection ${connectionId} re-associated with session ${sessionId} (state: ${session.currentState})`);
-
-    // Push current state so the frontend can sync
-    if (session.currentState === INTERVIEW_STATES.TERMINATED || session.currentState === INTERVIEW_STATES.GENERATING_FEEDBACK) {
-        await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
-    } else {
-        // Bug 8: If reconnecting during AI_SPEAKING, the frontend is stuck because
-        // no TTS audio will play and onPlaybackComplete will never fire.
-        // Send an empty isLast chunk to unblock the TTS service.
-        if (session.currentState === INTERVIEW_STATES.AI_SPEAKING) {
-            const now = Date.now();
-            const lastUpdate = session.updatedAt ? new Date(session.updatedAt).getTime() : now;
-            const diffSeconds = (now - lastUpdate) / 1000;
-            
-            if (diffSeconds > 20) {
-            // Send whatever question text we have
-            if (session.questionText) {
-                await postToConnection(connectionId, {
-                    type: 'question_text_update',
-                    payload: {
-                        sessionId,
-                        turnIndex: session.turnCount,
-                        questionText: session.questionText
-                    }
-                });
-            }
-            // Send isLast to unblock TTS → fires onPlaybackComplete → enables mic
-            await postToConnection(connectionId, {
-                type: 'tts_audio_chunk',
-                payload: { audioData: '', isLast: true }
-            });
-            await postToConnection(connectionId, {
-                type: 'ai_speaking_complete',
-                payload: { sessionId, turnIndex: session.turnCount }
-            });
-            // Transition to USER_RESPONDING
-            try {
-                await transitionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
-            } catch (e) {
-                console.warn('[Reconnect] State transition failed:', e.message);
-            }
-            await pushStateUpdate(
-                connectionId, sessionId,
-                INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.USER_RESPONDING,
-                session.turnCount,
-                null
-            );
-            }
-        } else {
-            // Normal reconnect — send question text separately to avoid transcript duplication
-            if (session.questionText) {
-                await postToConnection(connectionId, {
-                    type: 'question_text_update',
-                    payload: {
-                        sessionId,
-                        turnIndex: session.turnCount,
-                        questionText: session.questionText
-                    }
-                });
-            }
-            // Push state WITHOUT questionText to avoid transcript duplication
-            await pushStateUpdate(
-                connectionId, sessionId,
-                session.currentState, session.currentState,
-                session.turnCount,
-                null
-            );
-        }
-    }
-
-    return { statusCode: 200 };
-}
-
-
-async function handleTerminateSession(connectionId, body) {
-    const { sessionId } = body.payload || {};
+  try {
+    const { terminateSession } = require('../interview/terminateSession');
     await terminateSession.handler({
-        body: JSON.stringify({ sessionId, reason: 'USER_INITIATED' })
+      body: JSON.stringify({ sessionId, reason })
     });
-    
-    await postToConnection(connectionId, { type: 'termination', payload: { sessionId } });
-    return { statusCode: 200 };
+
+    try {
+      await postToConnection(connectionId, {
+        type: 'termination',
+        payload: { sessionId, reason, timestamp: Date.now() }
+      });
+    } catch (wsErr) {
+      if (wsErr.message === 'StaleConnectionError') {
+        console.warn(`Stale connection during termination for ${sessionId}`);
+      } else {
+        throw wsErr;
+      }
+    }
+
+  } catch (err) {
+    console.error('terminate_session error:', err);
+    await sendError(connectionId, err.message);
+  }
 }
+
+exports.handler = async (event) => {
+  const connectionId = event.requestContext?.connectionId;
+  const routeKey = event.requestContext?.routeKey;
+  const body = JSON.parse(event.body || '{}');
+  const userId = event.requestContext?.authorizer?.uid || body.userId;
+
+  if (!userId) {
+    console.error('WebSocket message missing userId');
+    return await sendError(connectionId, 'userId required');
+  }
+
+  console.log(`Received WS message [${body.type || routeKey}] from connection ${connectionId}`);
+
+  try {
+    switch (body.type || routeKey) {
+      case 'session_init':
+        await handleSessionInit(connectionId, body.payload || body, userId);
+        break;
+      case 'turn_submit':
+        await handleTurnSubmit(connectionId, body.payload || body, userId);
+        break;
+      case 'session_reconnect':
+        await handleSessionReconnect(connectionId, body.payload || body, userId);
+        break;
+      case 'terminate_session':
+        await handleTerminateSession(connectionId, body.payload || body, userId);
+        break;
+      case 'ping':
+        await postToConnection(connectionId, { type: 'pong', timestamp: Date.now() });
+        break;
+      default:
+        console.warn(`Unknown message type: ${body.type}`);
+    }
+  } catch (error) {
+    console.error('WebSocket handler error:', error);
+    await sendError(connectionId, 'Internal server error');
+  }
+
+  return { statusCode: 200 };
+};

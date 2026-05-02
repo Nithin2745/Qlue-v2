@@ -1,131 +1,207 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:flutter/foundation.dart';
-import '../constants/app_constants.dart';
+import 'package:web_socket_channel/status.dart' as status;
 
-enum WebSocketStatus { connecting, connected, disconnected }
+enum WebSocketStatus { disconnected, connecting, connected, reconnecting }
 
 class WebSocketClient {
-  static final WebSocketClient _instance = WebSocketClient._internal();
-  factory WebSocketClient() => _instance;
-  WebSocketClient._internal();
-
   WebSocketChannel? _channel;
-  WebSocketStatus _status = WebSocketStatus.disconnected;
-  
-  final _messageController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onMessage => _messageController.stream;
-  
-  WebSocketStatus get status => _status;
-  
-  Timer? _heartbeatTimer;
+  final String url;
+  final String userId;
+  final String sessionId;
+  final Map<String, String> headers;
+
+  String? _authToken; // BUG-7 FIX: Store token for reconnect
+
+  final StreamController<Map<String, dynamic>> _messageController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<String> _errorController =
+      StreamController<String>.broadcast();
+  final StreamController<void> _disconnectController =
+      StreamController<void>.broadcast();
+  final StreamController<void> _reconnectController =
+      StreamController<void>.broadcast();
+
+  Timer? _reconnectTimer;
+  bool _isConnected = false;
   int _reconnectAttempts = 0;
-  String? _lastUrl;
-  String? _sessionId;
+  static const int maxReconnectAttempts = 5;
+  static const Duration reconnectDelay = Duration(seconds: 2);
 
-  /// Store the active session ID so reconnect can re-associate
-  void setSessionId(String? id) {
-    _sessionId = id;
-  }
+  Completer<void>? _connectCompleter;
+  WebSocketStatus _status = WebSocketStatus.disconnected;
 
-  Future<void> connect(String url, String token) async {
-    final uri = Uri.parse(url);
-    final queryParams = Map<String, String>.from(uri.queryParameters);
-    if (token.isNotEmpty && !queryParams.containsKey('token')) {
-      queryParams['token'] = token;
-    }
-    final fullUrl = uri.replace(queryParameters: queryParams).toString();
-    _lastUrl = fullUrl;
-    _status = WebSocketStatus.connecting;
-    
-    try {
-      _channel = WebSocketChannel.connect(Uri.parse(fullUrl));
-      _status = WebSocketStatus.connected;
-      _reconnectAttempts = 0;
-      
-      _startHeartbeat();
-      
-      _channel!.stream.listen(
-        (message) {
-          try {
-            final data = jsonDecode(message);
-            _messageController.add(data);
-          } catch (e) {
-            debugPrint('WebSocket: Failed to parse message: $e');
-          }
-        },
-        onDone: () => _handleDisconnect(),
-        onError: (e) => _handleDisconnect(),
-      );
-    } catch (e) {
-      _handleDisconnect();
-    }
-  }
+  WebSocketStatus get connectionStatus => _status;
 
-  void _handleDisconnect() {
-    _status = WebSocketStatus.disconnected;
-    _stopHeartbeat();
-    
-    // Stop after 5 attempts to prevent infinite loops
-    if (_reconnectAttempts >= 5 || _lastUrl == null) {
+  WebSocketClient({
+    required this.url,
+    required this.userId,
+    required this.sessionId,
+    this.headers = const {},
+  });
+
+  Stream<Map<String, dynamic>> get messages => _messageController.stream;
+  Stream<String> get errors => _errorController.stream;
+  Stream<void> get disconnects => _disconnectController.stream;
+  Stream<void> get reconnects => _reconnectController.stream;
+  bool get isConnected => _isConnected;
+
+  Future<void> connect({String? authToken}) async {
+    if (_status == WebSocketStatus.connected || _status == WebSocketStatus.connecting) {
       return;
     }
 
-    final delay = math.min(
-      math.pow(2, _reconnectAttempts) * 1000,
-      AppConstants.maxWebsocketReconnectDelay.inMilliseconds.toDouble(),
-    ).toInt();
-    
-    _reconnectAttempts++;
-    debugPrint('WebSocket: Reconnecting in ${delay}ms (attempt $_reconnectAttempts/5)');
-    Timer(Duration(milliseconds: delay), () async {
-      if (_status == WebSocketStatus.disconnected && _lastUrl != null) {
-        try {
-          // FIX: Token is already embedded in _lastUrl query string
-          await connect(_lastUrl!, '');
-          
-          // After successful reconnect, re-associate with active session
-          if (_status == WebSocketStatus.connected && _sessionId != null) {
-            debugPrint('WebSocket: Reconnected — re-associating session $_sessionId');
-            send('session_reconnect', {'sessionId': _sessionId!});
-          }
-        } catch (e) {
-          debugPrint('WebSocket: Reconnect failed: $e');
-        }
-      }
-    });
-  }
+    _status = WebSocketStatus.connecting;
+    _connectCompleter = Completer<void>();
 
-  void send(String type, Map<String, dynamic> payload) {
-    if (_status == WebSocketStatus.connected && _channel != null) {
-      try {
-        _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
-      } catch (e) {
-        debugPrint('WebSocket: Send error: $e');
-        _handleDisconnect();
+    try {
+      // BUG-7 FIX: Store authToken for use in reconnect
+      _authToken = authToken;
+      
+      // Append Firebase auth token as query param
+      final wsUrl = authToken != null && authToken.isNotEmpty
+          ? Uri.parse(url).replace(queryParameters: {'token': authToken}).toString()
+          : url;
+
+      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
+
+      await _channel!.ready;
+      _isConnected = true;
+      _status = WebSocketStatus.connected;
+      bool wasReconnecting = _reconnectAttempts > 0;
+      _reconnectAttempts = 0;
+
+      if (wasReconnecting) {
+        _reconnectController.add(null);
       }
+
+      // Send initial connection message
+      _sendMessage({
+        'type': 'connect',
+        'userId': userId,
+        'sessionId': sessionId,
+      });
+
+      // Listen to incoming messages
+      _channel!.stream.listen(
+        _handleMessage,
+        onError: _handleError,
+        onDone: _handleDisconnect,
+      );
+
+      if (_connectCompleter != null && !_connectCompleter!.isCompleted) {
+        _connectCompleter!.complete();
+      }
+    } catch (e) {
+      _status = WebSocketStatus.disconnected;
+      _connectCompleter?.completeError(e);
+      _scheduleReconnect();
+      rethrow;
     }
   }
 
-  void _startHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(AppConstants.websocketHeartbeatInterval, (timer) {
-      send('ping', {});
-    });
+  Future<void> waitForConnection() async {
+    if (_connectCompleter != null) {
+      await _connectCompleter!.future;
+    }
   }
 
-  void _stopHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
+  void _handleMessage(dynamic message) {
+    try {
+      final data = jsonDecode(message as String) as Map<String, dynamic>;
+      _messageController.add(data);
+    } catch (e) {
+      _errorController.add('Failed to parse message: $e');
+    }
+  }
+
+  void _handleError(Object error) {
+    _errorController.add('WebSocket error: $error');
+    _handleDisconnect();
+  }
+
+  void _handleDisconnect() {
+    _isConnected = false;
+    _status = WebSocketStatus.disconnected;
+    _disconnectController.add(null);
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_reconnectAttempts >= maxReconnectAttempts) return;
+
+    _status = WebSocketStatus.reconnecting;
+    _reconnectTimer?.cancel();
+    final delay = reconnectDelay * math.min(_reconnectAttempts + 1, 15);
+    _reconnectTimer = Timer(
+      delay,
+      () async {
+        _reconnectAttempts++;
+        
+        // BUG-7 FIX: Refresh Firebase token before reconnect
+        try {
+          final newToken = await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          await connect(authToken: newToken);
+        } catch (e) {
+          _errorController.add('Failed to refresh token for reconnect: $e');
+          _scheduleReconnect();
+        }
+      },
+    );
+  }
+
+  void send(dynamic data) {
+    if (_status != WebSocketStatus.connected || _channel == null) {
+      throw StateError('WebSocket not connected. Status: $_status');
+    }
+
+    if (data is Map<String, dynamic>) {
+      _sendMessage(data);
+    } else if (data is String) {
+      try {
+        final message = jsonDecode(data) as Map<String, dynamic>;
+        _sendMessage(message);
+      } catch (e) {
+        _errorController.add('Invalid send payload: $e');
+      }
+    } else {
+      _errorController.add('Unsupported send payload type: ${data.runtimeType}');
+    }
+  }
+
+  void sendMessage(Map<String, dynamic> message) {
+    if (_isConnected && _channel != null) {
+      _sendMessage(message);
+    } else {
+      _errorController.add('Cannot send message: not connected');
+    }
+  }
+
+  void _sendMessage(Map<String, dynamic> message) {
+    try {
+      final jsonMessage = jsonEncode(message);
+      _channel!.sink.add(jsonMessage);
+    } catch (e) {
+      _errorController.add('Failed to send message: $e');
+    }
   }
 
   void disconnect() {
-    _lastUrl = null;
-    _sessionId = null;
-    _stopHeartbeat();
-    _channel?.sink.close();
+    _reconnectTimer?.cancel();
+    _channel?.sink.close(status.goingAway);
+    _channel = null;
+    _isConnected = false;
     _status = WebSocketStatus.disconnected;
+    _disconnectController.add(null);
+  }
+
+  void dispose() {
+    disconnect();
+    _messageController.close();
+    _errorController.close();
+    _disconnectController.close();
   }
 }

@@ -21,9 +21,11 @@ Globals:
         NOTIFICATIONS_TABLE: !Ref NotificationsTable
         RESUMES_BUCKET: !Ref ResumesBucket
         SCRAPED_CONTENT_BUCKET: !Ref ScrapedContentBucket
+        AUDIO_BUCKET: !Ref AudioBucket
         FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
         WEBSOCKET_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
         BEDROCK_MODEL_ID: 'nvidia.nemotron-super-3-120b'
+        ALLOWED_VOICES: "Tiffany,Ruth,Joanna,Matthew,Stephen"
 
 Resources:
   # ==============================================================================
@@ -338,6 +340,26 @@ Resources:
             Status: Enabled
             ExpirationInDays: 30
 
+  AudioBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDeleteAudio
+            Status: Enabled
+            ExpirationInDays: 7
+
   # ==============================================================================
   # API GATEWAYS
   # ==============================================================================
@@ -382,25 +404,15 @@ Resources:
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: "$request.body.type"
 
-  WebSocketDeployment:
-    Type: AWS::ApiGatewayV2::Deployment
-    DependsOn:
-      - ConnectRoute
-      - DisconnectRoute
-      - DefaultRoute
-    Properties:
-      ApiId: !Ref WebSocketApi
-
   WebSocketStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       StageName: prod
-      DefaultRouteSettings:
-        ThrottlingBurstLimit: 20
-        ThrottlingRateLimit: 10
-      ApiId: !Ref WebSocketApi
-      DeploymentId: !Ref WebSocketDeployment
       AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 200
+        ThrottlingRateLimit: 100
+      ApiId: !Ref WebSocketApi
 
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -773,6 +785,8 @@ Resources:
               Action:
                 - textract:AnalyzeDocument
                 - textract:DetectDocumentText
+                - textract:StartDocumentAnalysis
+                - textract:GetDocumentAnalysis
               Resource: '*'
         - Statement:
             - Effect: Allow
@@ -1053,6 +1067,9 @@ Resources:
       CodeUri: src/
       MemorySize: 256
       Timeout: 15
+      Environment:
+        Variables:
+          TRIGGER_FEEDBACK_FUNCTION_NAME: !Ref TriggerFeedbackGenerationFunction
       Events:
         Api:
           Type: Api
@@ -1069,9 +1086,57 @@ Resources:
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['lambda:InvokeFunction'], Resource: !GetAtt TriggerFeedbackGenerationFunction.Arn }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+
+  AsyncInterviewDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
+  AsyncInterviewQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 5400 # 6 * Lambda timeout
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AsyncInterviewDLQ.Arn
+        maxReceiveCount: 3
+
+  AsyncInterviewWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers/interview/asyncWorker.handler
+      CodeUri: src/
+      MemorySize: 1024
+      Timeout: 900
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AsyncInterviewQueue.Arn
+            BatchSize: 1
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
+        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - S3CrudPolicy: { BucketName: !Ref AudioBucket }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+      Environment:
+        Variables:
+          FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
 
 
   # ========= WEBSOCKET =========
@@ -1102,13 +1167,14 @@ Resources:
   SendTextHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      AutoPublishAlias: live
-      ProvisionedConcurrencyConfig:
-        ProvisionedConcurrentExecutions: 1
       Handler: handlers/websocket/sendTextHandler.handler
       CodeUri: src/
-      MemorySize: 512
-      Timeout: 29
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          ASYNC_QUEUE_URL: !Ref AsyncInterviewQueue
+          FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref WSConnectionsTable }
         - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
@@ -1116,12 +1182,17 @@ Resources:
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
         - Statement: [{ Effect: Allow, Action: ['execute-api:ManageConnections'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
         - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
-        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
+        - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - S3CrudPolicy: { BucketName: !Ref AudioBucket }
+        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
+        - Statement: [{ Effect: Allow, Action: ['sqs:SendMessage'], Resource: !GetAtt AsyncInterviewQueue.Arn }]
 
 
 
@@ -1155,6 +1226,9 @@ Resources:
       CodeUri: src/
       MemorySize: 256
       Timeout: 15
+      Environment:
+        Variables:
+          ANALYZE_TRANSCRIPT_LAMBDA: !Ref AnalyzeTranscriptFunction
       Events:
         SNSTrigger:
           Type: SNS
@@ -1466,8 +1540,6 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 5
       ComparisonOperator: GreaterThanThreshold
-      AlarmActions:
-        - !Ref FeedbackTriggerTopic
 
   DynamoDBThrottledRequestsAlarm:
     Type: AWS::CloudWatch::Alarm

@@ -20,11 +20,12 @@ const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'nvidia.nemotron-super-
 /**
  * Executes a Model Invocation using Converse API
  */
-async function invokeModel(modelId = DEFAULT_MODEL_ID, params, options = {}) {
+async function invokeModel(modelId, params, options = {}) {
+  const resolvedModelId = modelId || DEFAULT_MODEL_ID;
   const systemPrompt = "You are Qlue, an elite technical interviewer.";
   
   const command = new ConverseCommand({
-    modelId: modelId,
+    modelId: resolvedModelId,
     messages: params.messages || [],
     system: params.system ? [{ text: params.system }] : [{ text: systemPrompt }],
     inferenceConfig: {
@@ -72,11 +73,12 @@ async function invokeModel(modelId = DEFAULT_MODEL_ID, params, options = {}) {
  * @param {object} body 
  * @param {function} onToken Callback for each received token
  */
-async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
+async function invokeModelStream(modelId, params, onToken) {
+    const resolvedModelId = modelId || DEFAULT_MODEL_ID;
     const systemPrompt = "You are Qlue, an elite technical interviewer.";
 
     const command = new ConverseStreamCommand({
-        modelId,
+        modelId: resolvedModelId,
         messages: params.messages || [],
         system: params.system ? [{ text: params.system }] : [{ text: systemPrompt }],
         inferenceConfig: {
@@ -88,15 +90,16 @@ async function invokeModelStream(modelId = DEFAULT_MODEL_ID, params, onToken) {
 
     try {
         const abortController = new AbortController();
+        // 45s initial timeout for large model TTFT
         let timeoutTimer = setTimeout(() => {
             abortController.abort();
-        }, 15000);
+        }, 45000);
 
         const response = await bedrockClient.send(command, { abortSignal: abortController.signal });
         let fullText = "";
 
         for await (const event of response.stream) {
-            // Reset timer on token received
+            // Reset to 15s strictly for the gap between individual tokens
             clearTimeout(timeoutTimer);
             timeoutTimer = setTimeout(() => {
                 abortController.abort();
@@ -127,64 +130,66 @@ function buildInterviewPrompt(context, history, turnCount, moduleType) {
   let systemContent = "";
 
   if (moduleType === 'RESUME') {
-    const questionTypes = ['depth', 'experience', 'problem-solving'];
-    const questionType = questionTypes[turnCount % questionTypes.length];
+    const resumeSummary = typeof context === 'object'
+      ? (context.skills?.slice(0, 5).join(', ') || context.summary || 'technical background')
+      : context;
 
-    systemContent = `You are Qlue, a technical interviewer with the candidate's resume.
-Resume data:
-${typeof context === 'object' ? JSON.stringify(context) : context}
+    systemContent = `You are Qlue, a friendly technical interviewer from Qlue.
 
-CRITICAL VOICE RULES:
-- Output will be spoken aloud. Write ONLY what a human interviewer would say.
-- NEVER use markdown, bullet points, numbered lists, or formatting.
-- NEVER evaluate the previous answer or include meta-commentary.
-- NEVER repeat a question already asked.
-- NEVER greet the user or introduce yourself. The system already handled the greeting.
-- Keep each response to ONE technical question, max 40 words.
-- Use complete sentences. End with a clear question.
-- Spell out technical terms on first use.
-Reference specific technologies and projects from the resume.
-This turn's question type: ${questionType}. Alternate between depth, experience, and problem-solving questions.
-After 6-8 questions, conclude with 'Thank you. The technical interview is complete.'`;
+<core_personality>
+- Professional but approachable and natural
+- Listen actively and acknowledge what the candidate says
+- Guide the conversation gently if it goes off-track
+- Ask one clear question at a time
+</core_personality>
+
+<response_rules>
+1. ALWAYS respond in format: [Acknowledgment] || [Question]
+2. Acknowledgment: 1 sentence reacting to their answer (e.g., "That sounds interesting," "I see," "Great point")
+3. Question: ONE specific technical question, max 25 words
+4. If first turn (turn 0): Start with "Hi! I'm your interviewer from Qlue. Let's get started." then ask first question
+5. NEVER ask multiple questions at once
+6. NEVER repeat questions from history
+7. NEVER use markdown, bullets, or lists
+8. Focus on: ${resumeSummary}
+</response_rules>
+
+Candidate background: ${resumeSummary}`;
 
   } else if (moduleType === 'HR') {
-    const hrTopics = ['teamwork', 'problem-solving', 'leadership', 'conflict', 'adaptability'];
-    const currentTopic = hrTopics[turnCount % hrTopics.length];
+    systemContent = `You are Qlue, a friendly HR interviewer from Qlue.
 
-    systemContent = `You are Qlue, a professional HR interviewer.
-Current topic: ${currentTopic}.
+<core_personality>
+- Warm, professional, and conversational
+- Acknowledge candidate's answers before asking next question
+- Use STAR framework for behavioral questions
+</core_personality>
 
-CRITICAL VOICE RULES:
-- Output will be spoken aloud. Write ONLY spoken text.
-- NEVER use markdown, bullet points, numbered lists, or formatting.
-- NEVER evaluate, give feedback, or include meta-commentary.
-- NEVER repeat a question already asked.
-- NEVER greet the user or introduce yourself. The system already handled the greeting.
-- Keep each response to ONE behavioral question, max 40 words.
-- Use complete sentences. End with a question mark.
-Progress through: teamwork, problem-solving, leadership, conflict, adaptability.
-Use STAR framework questions with specific scenarios.
-After 5-6 questions, conclude with 'Thank you. This concludes our interview.'`;
+<response_rules>
+1. ALWAYS respond in format: [Acknowledgment] || [Question]
+2. Acknowledgment: 1 sentence reacting to their answer
+3. Question: ONE behavioral question using STAR framework, max 25 words
+4. If first turn: Start with "Hi! I'm your HR interviewer from Qlue. Let's begin." then ask first question
+5. NEVER ask multiple questions
+6. NEVER use markdown, bullets, or lists
+</response_rules>`;
 
   } else if (moduleType === 'INTRO') {
-    systemContent = `You are Qlue, a communication coach. NEVER use markdown or bullet points.
-Write ONLY spoken text, max 40 words per response.
-Do NOT evaluate or give feedback during the exercise.
-Do NOT greet the user or introduce yourself.
-Ask one follow-up question about the introduction.`;
-
-  } else {
-    systemContent = `You are Qlue, an interviewer. Ask one concise question, max 40 words.
-NEVER use markdown, bullet points, or formatting. Write ONLY spoken text.
-Do NOT greet the user or introduce yourself.
-Wait for the user to respond.`;
+    systemContent = `You are Qlue, a communication coach.
+<response_rules>
+1. ALWAYS respond in format: [Acknowledgment] || [Question]
+2. Acknowledgment: 1 sentence reacting to their introduction
+3. Question: ONE follow-up question, max 25 words
+4. If first turn: Start with "Hi! I'm your communication coach. Let's hear your introduction."
+5. NEVER use markdown or bullet points
+</response_rules>`;
   }
 
   return {
     system: systemContent,
     messages: [
       ...history,
-      { role: 'user', content: [{ text: turnCount === 0 ? "Let's begin the interview." : "Please ask the next question." }] }
+      { role: 'user', content: [{ text: turnCount === 0 ? "Let's begin the interview." : "Please respond to my answer and ask the next question." }] }
     ]
   };
 }
@@ -214,16 +219,16 @@ NEVER lecture for more than two sentences.`,
 function buildScoringPrompt(moduleType, latestResponse, dimensions) {
   return {
     system: `You are an interview evaluator. Score ONLY the candidate's LATEST response.
-Response to evaluate: "${typeof latestResponse === 'string' ? latestResponse : JSON.stringify(latestResponse)}"
 Dimensions: ${dimensions.join(', ')}.
 Rules:
 - Score each dimension 1-100 based ONLY on the latest response.
 - 3+ sentences with examples = 70-100. 1-2 sentences = 30-60. Short or irrelevant = 1-30.
-- Return ONLY JSON with dimension names as keys and numeric scores as values. No markdown, no explanation.`,
+- Return ONLY a raw JSON object with dimension names as keys and numeric scores as values. 
+- Do NOT use markdown code blocks (\`\`\`json). Do NOT include any conversational text.`,
     messages: [
       {
         role: 'user',
-        content: [{ text: "Score ONLY the latest response above across the listed dimensions." }]
+        content: [{ text: `Score ONLY the latest response inside the XML tags across the listed dimensions: <user_input>${typeof latestResponse === 'string' ? latestResponse : JSON.stringify(latestResponse)}</user_input>` }]
       }
     ]
   };
@@ -235,15 +240,16 @@ Rules:
 function buildFeedbackPrompt(moduleType, transcript, scores) {
   return {
     system: `You are an AI Interview coach providing actionable feedback.
-Review the following ${moduleType} session.
-Scores: ${JSON.stringify(scores)}
-Transcript: ${JSON.stringify(transcript)}
-
-Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths": [], "improvements": []}`,
+Provide 3 key strengths and 3 areas for improvement. 
+Format ONLY as a raw JSON object: {"strengths": [], "improvements": []}
+Do NOT use markdown code blocks.`,
     messages: [
       {
         role: 'user',
-        content: [{ text: "Please provide constructive feedback based on the scores and transcript." }]
+        content: [{ text: `Review the following ${moduleType} session. 
+Scores: ${JSON.stringify(scores)}
+Transcript: <user_input>${JSON.stringify(transcript)}</user_input>
+Please provide constructive feedback.` }]
       }
     ]
   };
@@ -254,14 +260,13 @@ Provide 3 key strengths and 3 areas for improvement. Format as JSON: {"strengths
  */
 function buildConceptExtractionPrompt(content) {
   return {
-    system: `Act as a semantic parser. Extract the top 3-5 core concepts from this webpage text that a user should learn.
-Text: ${content.substring(0, 5000)}
-
-Format as JSON array of strings: {"concepts": ["concept1", "concept2"]}`,
+    system: `Act as a semantic parser. Extract the top 3-5 core concepts from the provided text that a user should learn.
+Format ONLY as a raw JSON array of strings: {"concepts": ["concept1", "concept2"]}
+Do NOT use markdown code blocks.`,
     messages: [
       {
         role: 'user',
-        content: [{ text: "Extract concepts from the provided text." }]
+        content: [{ text: `Extract concepts from the following text: <user_input>${content.substring(0, 5000)}</user_input>` }]
       }
     ]
   };
@@ -294,13 +299,13 @@ function buildHRQuestionPrompt(context, history) {
 }
 
 function buildWebsiteTeachPrompt(targetConcept, content, history, isEvaluation) {
-  const systemContent = `You are a tutor helping a student learn about ${targetConcept} from this content:
-${content.substring(0, 5000)}
-
+  const systemContent = `You are a tutor helping a student learn about ${targetConcept}.
 Instructions:
 - If isEvaluation is true, check the last answer and provide feedback.
 - Ask a follow-up question to test understanding.
-- Return response as JSON: {"response": "your feedback and next question", "isCorrect": true/false}`;
+- Return response ONLY as a raw JSON object: {"response": "your feedback and next question", "isCorrect": true/false}
+- Do NOT use markdown code blocks.
+- Source material: ${content.substring(0, 5000)}`;
 
   const messages = [
     ...history,
@@ -312,10 +317,11 @@ Instructions:
 function buildSelfIntroEvalPrompt(transcript) {
   return {
     system: `You are an expert communication coach. Evaluate the self-introduction provided.
-    Provide constructive feedback and a follow-up question to improve the pitch.
-    Return response as JSON: {"response": "your feedback and follow-up"}`,
+Provide constructive feedback and a follow-up question to improve the pitch.
+Return response ONLY as a raw JSON object: {"response": "your feedback and follow-up"}
+Do NOT use markdown code blocks.`,
     messages: [
-      { role: 'user', content: [{ text: `Introduction to evaluate: ${transcript}` }] }
+      { role: 'user', content: [{ text: `Introduction to evaluate: <user_input>${transcript}</user_input>` }] }
     ]
   };
 }

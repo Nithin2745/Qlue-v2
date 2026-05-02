@@ -1,63 +1,78 @@
-const { INTERVIEW_STATES, updateSessionState, getSession } = require('../../models/session');
+const { getSessionById, updateSessionState } = require('../../models/session');
 
-// Deterministic 8-state machine definition
-const VALID_TRANSITIONS = {
-    [INTERVIEW_STATES.INITIALIZING]: [INTERVIEW_STATES.LOADING_CONTEXT, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.ERROR],
-    [INTERVIEW_STATES.LOADING_CONTEXT]: [INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.ERROR],
-    [INTERVIEW_STATES.AI_SPEAKING]: [
-        INTERVIEW_STATES.USER_RESPONDING, 
-        INTERVIEW_STATES.GENERATING_FEEDBACK, 
-        INTERVIEW_STATES.ERROR
-    ],
-    
-    // Processing user answers or silence timeouts
-    [INTERVIEW_STATES.USER_RESPONDING]: [INTERVIEW_STATES.PROCESSING_RESPONSE, INTERVIEW_STATES.SILENCE_DETECTED, INTERVIEW_STATES.GENERATING_FEEDBACK, INTERVIEW_STATES.ERROR], 
-    
-    // Silence leads to retry prompt or termination
-    [INTERVIEW_STATES.SILENCE_DETECTED]: [
-        INTERVIEW_STATES.AI_SPEAKING,
-        INTERVIEW_STATES.PROCESSING_RESPONSE,
-        INTERVIEW_STATES.USER_RESPONDING,
-        INTERVIEW_STATES.GENERATING_FEEDBACK,
-        INTERVIEW_STATES.TERMINATED,
-        INTERVIEW_STATES.ERROR
-    ],
-
-    [INTERVIEW_STATES.PROCESSING_RESPONSE]: [INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.GENERATING_FEEDBACK, INTERVIEW_STATES.ERROR],
-    [INTERVIEW_STATES.GENERATING_FEEDBACK]: [INTERVIEW_STATES.TERMINATED, INTERVIEW_STATES.ERROR],
-    [INTERVIEW_STATES.TERMINATED]: [], // Terminal state
-    [INTERVIEW_STATES.ERROR]: [] // Terminal state
+const INTERVIEW_STATES = {
+  INITIALIZING: 'INITIALIZING',
+  AI_SPEAKING: 'AI_SPEAKING',
+  USER_RESPONDING: 'USER_RESPONDING',
+  PROCESSING_RESPONSE: 'PROCESSING_RESPONSE',
+  SILENCE_DETECTED: 'SILENCE_DETECTED',
+  GENERATING_FEEDBACK: 'GENERATING_FEEDBACK',
+  TERMINATED: 'TERMINATED',
+  ERROR: 'ERROR'
 };
 
-/**
- * Checks if a state transition is legal according to the deterministic matrix
- */
-function validateTransition(currentState, targetState) {
-    if (!VALID_TRANSITIONS[currentState]) return false;
-    return VALID_TRANSITIONS[currentState].includes(targetState);
+const VALID_TRANSITIONS = {
+  INITIALIZING: ['AI_SPEAKING', 'TERMINATED', 'ERROR'],
+  AI_SPEAKING: ['USER_RESPONDING', 'TERMINATED', 'ERROR'],
+  USER_RESPONDING: ['PROCESSING_RESPONSE', 'TERMINATED', 'ERROR'],
+  PROCESSING_RESPONSE: ['AI_SPEAKING', 'TERMINATED', 'ERROR'],
+  SILENCE_DETECTED: ['AI_SPEAKING', 'TERMINATED', 'ERROR'],
+  GENERATING_FEEDBACK: ['TERMINATED', 'ERROR'],
+  TERMINATED: [],
+  ERROR: ['TERMINATED']
+};
+
+function transitionState(currentState, newState) {
+  const allowed = VALID_TRANSITIONS[currentState] || [];
+  if (!allowed.includes(newState)) {
+    throw new Error(`Invalid interview state transition: ${currentState} -> ${newState}`);
+  }
+  return newState;
 }
 
-/**
- * Executes a state transition, locking in DynamoDB to prevent race conditions.
- */
-async function transitionState(sessionId, targetState, updates = {}) {
-    const session = await getSession(sessionId);
-    if (!session) throw new Error('Session not found mapping to ID ' + sessionId);
-    
-    const currentState = session.currentState;
+exports.handler = async (event) => {
+  try {
+    const body = JSON.parse(event.body || '{}');
+    const { sessionId, newState, metadata = {} } = body;
 
-    if (!validateTransition(currentState, targetState)) {
-        throw new Error(`Invalid interview state transition: ${currentState} -> ${targetState}`);
+    if (!sessionId || !newState) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'sessionId and newState are required' })
+      };
     }
 
-    return await updateSessionState(sessionId, targetState, currentState, {
-        ...updates,
-        expectedVersion: session.version
-    });
-}
+    const session = await getSessionById(sessionId);
+    if (!session) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: 'Session not found' })
+      };
+    }
+
+    const validatedState = transitionState(session.currentState, newState);
+    await updateSessionState(sessionId, validatedState, null, metadata);
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        sessionId,
+        previousState: session.currentState,
+        newState: validatedState
+      })
+    };
+
+  } catch (error) {
+    console.error('Control Turn Flow Error:', error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
+  }
+};
 
 module.exports = {
-    INTERVIEW_STATES,
-    validateTransition,
-    transitionState
+  INTERVIEW_STATES,
+  VALID_TRANSITIONS,
+  transitionState
 };
