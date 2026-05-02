@@ -26,7 +26,7 @@ class InterviewProvider extends ChangeNotifier {
   String? moduleType;
   String? currentQuestion;
   String? audioUrl;
-  List<String> transcript = [];
+  List<TranscriptEntry> transcript = [];
   String? errorMessage;
   String _selectedVoiceId = 'Tiffany';
   String _selectedEngine = 'neural';
@@ -73,6 +73,14 @@ class InterviewProvider extends ChangeNotifier {
       _currentPhase = InterviewPhase.ready;
       _safeNotify();
     });
+    _wsClient!.reconnects.listen((_) {
+      if (sessionId != null) {
+        _wsClient!.sendMessage({
+          'type': 'session_reconnect',
+          'payload': {'sessionId': sessionId}
+        });
+      }
+    });
   }
 
   void _safeNotify() {
@@ -103,6 +111,8 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _handleTurnComplete(Map<String, dynamic> payload) {
+    isStreamingText = false;
+    transcript.add(TranscriptEntry(role: 'AI', text: payload['questionText'], timestamp: DateTime.now()));
     currentQuestion = payload['questionText'];
     questionText = currentQuestion ?? "...";
     finalQuestionText = questionText;
@@ -153,8 +163,12 @@ class InterviewProvider extends ChangeNotifier {
       },
       onFinal: (text) {
         finalTranscript = text;
-        transcript.add(text);
         isListening = false;
+        if (text.isEmpty) {
+          _silenceStrikes++;
+        } else {
+          _silenceStrikes = 0;
+        }
         _submitResponse(text);
         _safeNotify();
       },
@@ -162,15 +176,18 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _submitResponse(String text) {
+    isStreamingText = true;
     _currentPhase = InterviewPhase.processing;
     _safeNotify();
+
+    transcript.add(TranscriptEntry(role: 'USER', text: text, timestamp: DateTime.now()));
 
     _wsClient?.sendMessage({
       'type': 'turn_submit',
       'payload': {
         'sessionId': sessionId,
         'textTranscript': text,
-        'isSilence': false,
+        'isSilence': text.isEmpty,
         'voiceId': _selectedVoiceId,
         'engine': _selectedEngine,
       },

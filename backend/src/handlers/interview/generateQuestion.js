@@ -60,7 +60,8 @@ function formatConversationHistory(transcripts) {
     .sort((a, b) => (a.turnIndex || 0) - (b.turnIndex || 0))
     .map(t => {
       const speaker = t.speaker === 'AI' ? 'Emma (Interviewer)' : 'Candidate';
-      return `${speaker}: ${t.text || ''}`;
+      const safeText = (t.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `${speaker}: ${safeText}`;
     })
     .join('\n');
 }

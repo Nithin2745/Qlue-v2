@@ -77,7 +77,7 @@ async function handleSessionInit(connectionId, body, userId) {
         TableName: WS_CONNECTIONS_TABLE,
         Key: { connectionId },
         UpdateExpression: 'SET sessionId = :sessionId, userId = :userId, isActive = :active, connectedAt = :connectedAt, #ttl = :ttl',
-        ConditionExpression: 'attribute_not_exists(connectionId) OR isActive <> :active',
+        ConditionExpression: 'attribute_not_exists(connectionId) OR isActive = :active',
         ExpressionAttributeNames: { '#ttl': 'ttl' },
         ExpressionAttributeValues: {
           ':sessionId': sessionId,
@@ -167,7 +167,8 @@ async function handleTurnSubmit(connectionId, body, userId) {
         body: { textTranscript, isSilence, currentConceptId },
         action: 'turn_submit',
         voiceId: finalVoiceId,
-        engine: finalEngine
+        engine: finalEngine,
+        expectedTurnCount: session.turnCount || 0
       })
     }));
 

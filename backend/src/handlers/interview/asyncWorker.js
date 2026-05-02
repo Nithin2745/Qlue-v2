@@ -204,8 +204,8 @@ exports.handler = async (event) => {
         continue;
       }
 
-if (action === 'turn_submit' && session.currentState === INTERVIEW_STATES.USER_RESPONDING) {
-          console.warn(`[AsyncWorker] Session ${sessionId} already in USER_RESPONDING, skipping duplicate`);
+if (action === 'turn_submit' && session.turnCount > (body.expectedTurnCount || 0)) {
+          console.warn(`[AsyncWorker] Turn ${body.expectedTurnCount} already processed (current: ${session.turnCount}), skipping`);
           continue;
         }
 

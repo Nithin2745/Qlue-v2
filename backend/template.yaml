@@ -1091,10 +1091,18 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
 
+  AsyncInterviewDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
   AsyncInterviewQueue:
     Type: AWS::SQS::Queue
     Properties:
-      VisibilityTimeout: 900 # Matches Lambda timeout + buffer
+      VisibilityTimeout: 5400 # 6 * Lambda timeout
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AsyncInterviewDLQ.Arn
+        maxReceiveCount: 3
 
   AsyncInterviewWorkerFunction:
     Type: AWS::Serverless::Function

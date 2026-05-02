@@ -20,9 +20,14 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'sessionId required' }) };
     }
 
+    const userId = event.requestContext?.authorizer?.uid;
     const session = await getSessionById(sessionId);
     if (!session) {
       return { statusCode: 404, body: JSON.stringify({ error: 'Session not found' }) };
+    }
+
+    if (session.userId !== userId) {
+      return { statusCode: 403, body: JSON.stringify({ error: 'Forbidden' }) };
     }
 
     const turnIndex = session.turnCount || 0;

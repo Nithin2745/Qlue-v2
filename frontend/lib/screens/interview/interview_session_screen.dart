@@ -72,7 +72,9 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
-      assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
+      if (!(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO')) {
+        throw ArgumentError('Invalid moduleType');
+      }
 
       provider.initSession(
         type,

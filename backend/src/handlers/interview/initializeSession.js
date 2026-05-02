@@ -64,9 +64,13 @@ exports.handler = async (event) => {
         const wsHttpEndpoint = process.env.WEBSOCKET_ENDPOINT || '';
         let wsUrl = '';
         if (wsHttpEndpoint) {
-          wsUrl = wsHttpEndpoint.startsWith('https://') 
-            ? wsHttpEndpoint.replace('https://', 'wss://') 
-            : wsHttpEndpoint;
+          if (wsHttpEndpoint.startsWith('https://')) {
+            wsUrl = wsHttpEndpoint.replace('https://', 'wss://');
+          } else if (wsHttpEndpoint.startsWith('http://')) {
+            wsUrl = wsHttpEndpoint.replace('http://', 'ws://');
+          } else {
+            wsUrl = wsHttpEndpoint;
+          }
         } else {
           wsUrl = process.env.WS_FALLBACK_URL || '';
         }

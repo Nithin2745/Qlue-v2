@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
@@ -20,6 +21,8 @@ class WebSocketClient {
   final StreamController<String> _errorController =
       StreamController<String>.broadcast();
   final StreamController<void> _disconnectController =
+      StreamController<void>.broadcast();
+  final StreamController<void> _reconnectController =
       StreamController<void>.broadcast();
 
   Timer? _reconnectTimer;
@@ -43,6 +46,7 @@ class WebSocketClient {
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<String> get errors => _errorController.stream;
   Stream<void> get disconnects => _disconnectController.stream;
+  Stream<void> get reconnects => _reconnectController.stream;
   bool get isConnected => _isConnected;
 
   Future<void> connect({String? authToken}) async {
@@ -67,7 +71,12 @@ class WebSocketClient {
       await _channel!.ready;
       _isConnected = true;
       _status = WebSocketStatus.connected;
+      bool wasReconnecting = _reconnectAttempts > 0;
       _reconnectAttempts = 0;
+
+      if (wasReconnecting) {
+        _reconnectController.add(null);
+      }
 
       // Send initial connection message
       _sendMessage({
@@ -126,8 +135,9 @@ class WebSocketClient {
 
     _status = WebSocketStatus.reconnecting;
     _reconnectTimer?.cancel();
+    final delay = reconnectDelay * math.min(_reconnectAttempts + 1, 15);
     _reconnectTimer = Timer(
-      reconnectDelay * (_reconnectAttempts + 1),
+      delay,
       () async {
         _reconnectAttempts++;
         
