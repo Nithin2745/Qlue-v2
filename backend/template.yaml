@@ -1102,7 +1102,7 @@ Resources:
       Handler: handlers/interview/asyncWorker.handler
       CodeUri: src/
       MemorySize: 1024
-      Timeout: 900
+      Timeout: 30
       Events:
         SQSEvent:
           Type: SQS
