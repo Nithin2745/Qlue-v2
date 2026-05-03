@@ -1,6 +1,5 @@
 const { getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 const { saveTranscript } = require('../../models/transcript');
-const crypto = require('crypto');
 
 const SILENCE_THRESHOLD = 3;
 const MAX_TURNS = 20;
@@ -83,8 +82,8 @@ exports.handler = async (event) => {
       };
     }
 
-    // Update session state
-    await updateSessionState(sessionId, INTERVIEW_STATES.PROCESSING_RESPONSE, null, {
+    // Preserve the current session state while persisting concept selection and reset silence retries
+    await updateSessionState(sessionId, session.currentState, null, {
       currentConceptId: currentConceptId || session.currentConceptId,
       silenceRetries: 0
     });

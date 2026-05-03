@@ -4,7 +4,7 @@
 const { invokeModel, buildFeedbackPrompt } = require('../../lib/bedrock');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 
-const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'ap-south-1' });
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const STORE_LAMBDA = process.env.STORE_FEEDBACK_LAMBDA;
 
 exports.handler = async (event) => {

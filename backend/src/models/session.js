@@ -1,7 +1,7 @@
 const { docClient } = require('../lib/dynamodb');
 const { PutCommand, UpdateCommand, GetCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
 
-const SESSIONS_TABLE = process.env.SESSIONS_TABLE || "Sessions";
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'qlue-sessions';
 
 const INTERVIEW_STATES = {
     INITIALIZING: "INITIALIZING",

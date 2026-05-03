@@ -1,15 +1,4 @@
-const { getSessionById, updateSessionState } = require('../../models/session');
-
-const INTERVIEW_STATES = {
-  INITIALIZING: 'INITIALIZING',
-  AI_SPEAKING: 'AI_SPEAKING',
-  USER_RESPONDING: 'USER_RESPONDING',
-  PROCESSING_RESPONSE: 'PROCESSING_RESPONSE',
-  SILENCE_DETECTED: 'SILENCE_DETECTED',
-  GENERATING_FEEDBACK: 'GENERATING_FEEDBACK',
-  TERMINATED: 'TERMINATED',
-  ERROR: 'ERROR'
-};
+const { getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 
 const VALID_TRANSITIONS = {
   INITIALIZING: ['AI_SPEAKING', 'TERMINATED', 'ERROR'],

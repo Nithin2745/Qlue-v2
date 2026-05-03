@@ -3,7 +3,7 @@
  */
 const ddb = require('../lib/dynamodb');
 
-const TABLE_NAME = process.env.WS_CONNECTIONS_TABLE || 'WSConnections';
+const TABLE_NAME = process.env.WS_CONNECTIONS_TABLE || 'qlue-ws-connections';
 
 /**
  * Finds user's active connection via GSI.

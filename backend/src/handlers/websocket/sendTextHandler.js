@@ -45,7 +45,6 @@ async function updateConnectionHeartbeat(connectionId) {
   if (!connectionId) return;
   try {
     const { docClient } = require('../../lib/dynamodb');
-    const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
     await docClient.send(new UpdateCommand({
       TableName: WS_CONNECTIONS_TABLE,
       Key: { connectionId },
@@ -375,6 +374,7 @@ exports.handler = async (event) => {
         break;
       default:
         console.warn(`Unknown message type: ${body.type}`);
+        await sendError(connectionId, `Unknown message type: ${body.type || routeKey}`);
     }
   } catch (error) {
     console.error('WebSocket handler error:', error);

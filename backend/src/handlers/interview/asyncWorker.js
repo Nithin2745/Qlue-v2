@@ -2,12 +2,12 @@ const { handler: generateQuestion, cleanAIResponse } = require('./generateQuesti
 const { synthesizeSpeech } = require('../../lib/polly');
 const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 const { saveTranscript, getTranscriptBySession } = require('../../models/transcript');
+const { processUserInput } = require('./processUserInput');
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
 const { postToConnection } = require('../../lib/websocket');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const crypto = require('crypto');
 
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 const AUDIO_BUCKET = process.env.AUDIO_BUCKET;
@@ -225,7 +225,6 @@ if (action === 'turn_submit' && session.turnCount > (body.expectedTurnCount || 0
         });
       } 
       else if (action === 'turn_submit') {
-        const { processUserInput } = require('./processUserInput');
         const processResult = await processUserInput.handler({
           requestContext: {
             authorizer: {
