@@ -118,11 +118,11 @@ class InterviewProvider extends ChangeNotifier {
     finalQuestionText = questionText;
     subtitleText = questionText;
     audioUrl = payload['audioUrl'];
+    final audioData = payload['audioData'] as String?;
     _currentPhase = InterviewPhase.speaking;
     _safeNotify();
 
-    if (audioUrl != null) {
-      // BUG-8 FIX: Add timeout and error handling for TTS playback
+    if (audioUrl?.isNotEmpty == true) {
       _ttsService.playUrl(audioUrl!)
           .timeout(Duration(seconds: 10), onTimeout: () {
         throw TimeoutException('Audio playback timed out');
@@ -138,6 +138,26 @@ class InterviewProvider extends ChangeNotifier {
         debugPrint('TTS playback error: $error');
         _safeNotify();
       });
+    } else if (audioData != null && audioData.isNotEmpty) {
+      _ttsService.playBase64(audioData)
+          .timeout(Duration(seconds: 10), onTimeout: () {
+        throw TimeoutException('Audio playback timed out');
+      })
+          .then((_) {
+        _currentPhase = InterviewPhase.listening;
+        _safeNotify();
+        _startListening();
+      })
+          .catchError((error) {
+        errorMessage = 'Audio playback failed: $error';
+        _currentPhase = InterviewPhase.error;
+        debugPrint('TTS playback error: $error');
+        _safeNotify();
+      });
+    } else {
+      errorMessage = 'Audio unavailable. Question: $questionText';
+      _currentPhase = InterviewPhase.error;
+      _safeNotify();
     }
   }
 
@@ -155,6 +175,7 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _startListening() {
+    if (_currentPhase == InterviewPhase.listening || isListening) return;
     isListening = true;
     _sttService.startListening(
       onPartial: (text) {

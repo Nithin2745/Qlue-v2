@@ -2,6 +2,7 @@ const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
+const { getTranscriptBySession } = require('../../models/transcript');
 const { deregisterConnection } = require('../../lib/websocket');
 
 const sqsClient = new SQSClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -38,6 +39,21 @@ async function sendError(connectionId, message, code = 400) {
   } catch (e) {
     console.error('Failed to send error:', e);
   }
+}
+
+async function getLastAiTurnIndex(sessionId, sessionTurnCount = 0) {
+  try {
+    const transcripts = await getTranscriptBySession(sessionId);
+    for (let i = transcripts.length - 1; i >= 0; i--) {
+      const item = transcripts[i];
+      if (item.speaker === 'AI') {
+        return Number(item.turnIndex) || 0;
+      }
+    }
+  } catch (err) {
+    console.warn(`Unable to resolve last AI turn index for session ${sessionId}:`, err);
+  }
+  return Math.max(0, (sessionTurnCount || 1) - 1);
 }
 
 async function handleSessionInit(connectionId, body, userId) {
@@ -154,6 +170,10 @@ async function handleTurnSubmit(connectionId, body, userId) {
       throw stateErr;
     }
 
+    if (!textTranscript && !isSilence) {
+      return await sendError(connectionId, 'textTranscript is required when not marked as silence', 400);
+    }
+
     const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
     const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');
     const finalEngine = ['neural', 'standard', 'long-form', 'generative'].includes(engine) ? engine : (session.engine || 'neural');
@@ -220,6 +240,7 @@ async function handleSessionReconnect(connectionId, body, userId) {
     // If stuck in AI_SPEAKING/PROCESSING for >30s, recover
     const staleThreshold = 30000;
     const isStale = session.updatedAt && (Date.now() - session.updatedAt > staleThreshold);
+    const lastAiTurnIndex = await getLastAiTurnIndex(sessionId, session.turnCount || 0);
     
     if (isStale && (session.currentState === INTERVIEW_STATES.AI_SPEAKING || session.currentState === INTERVIEW_STATES.PROCESSING_RESPONSE)) {
       await updateSessionState(sessionId, INTERVIEW_STATES.USER_RESPONDING);
@@ -227,7 +248,7 @@ async function handleSessionReconnect(connectionId, body, userId) {
         type: 'turn_complete',
         payload: {
           sessionId,
-          turnIndex: session.turnCount || 0,
+          turnIndex: lastAiTurnIndex,
           questionText: session.questionText || 'Welcome back. Please respond when ready.',
           audioData: '',
           audioUrl: '',
@@ -244,7 +265,7 @@ async function handleSessionReconnect(connectionId, body, userId) {
         type: 'turn_complete',
         payload: {
           sessionId,
-          turnIndex: session.turnCount || 0,
+          turnIndex: lastAiTurnIndex,
           questionText: session.questionText,
           audioData: '',
           audioUrl: '',
@@ -257,7 +278,7 @@ async function handleSessionReconnect(connectionId, body, userId) {
         type: 'turn_complete',
         payload: {
           sessionId,
-          turnIndex: session.turnCount || 0,
+          turnIndex: lastAiTurnIndex,
           questionText: 'Welcome back. Please respond when ready.',
           audioData: '',
           audioUrl: '',

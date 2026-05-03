@@ -120,7 +120,7 @@ Resources:
           KeySchema:
             - AttributeName: userId
               KeyType: HASH
-            - AttributeName: status
+            - AttributeName: activeMarker
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
@@ -973,8 +973,6 @@ Resources:
         - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
         - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
-        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
-        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
