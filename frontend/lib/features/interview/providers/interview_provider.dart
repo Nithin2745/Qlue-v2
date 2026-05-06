@@ -175,7 +175,7 @@ class InterviewProvider extends ChangeNotifier {
   }
 
   void _startListening() {
-    if (_currentPhase == InterviewPhase.listening || isListening) return;
+    if (isListening) return;
     isListening = true;
     _sttService.startListening(
       onPartial: (text) {
@@ -324,10 +324,16 @@ class InterviewProvider extends ChangeNotifier {
     _safeNotify();
   }
 
+  // frontend/lib/features/interview/providers/interview_provider.dart (Around Line 248)
+
   Future<void> endSession() async {
     if (isSessionEnded) return;
 
     terminateSession();
+    
+    // FIX: Give the WebSocket 300ms to physically send the termination message 
+    // to AWS before we sever the connection.
+    await Future.delayed(const Duration(milliseconds: 300));
 
     isSessionEnded = true;
     _cleanup();

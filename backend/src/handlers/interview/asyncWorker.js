@@ -88,7 +88,8 @@ async function generateAtomicTurn({
           websiteContent,
           targetConcept,
           turnIndex: session.turnCount || 0,
-          conversationHistory
+          conversationHistory,
+          voiceId
         })
       });
       
