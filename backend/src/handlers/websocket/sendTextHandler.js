@@ -95,8 +95,9 @@ async function handleSessionInit(connectionId, body, userId) {
 
     const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
     const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');
-    const finalEngine = ['neural', 'standard', 'long-form', 'generative'].includes(engine) ? engine : 'neural';
-
+    
+    // Force generative engine universally
+    const finalEngine = 'generative';
     // Do not advance session state here; asyncWorker owns session initialization state transitions.
 
     // BUG-4 FIX: Use UpdateCommand with attribute_not_exists to prevent overwrite race
@@ -191,7 +192,9 @@ async function handleTurnSubmit(connectionId, body, userId) {
 
     const allowedVoices = (process.env.ALLOWED_VOICES || 'Tiffany,Ruth,Joanna,Matthew,Stephen').split(',');
     const finalVoiceId = allowedVoices.includes(voiceId) ? voiceId : (session.voiceId || 'Tiffany');
-    const finalEngine = ['neural', 'standard', 'long-form', 'generative'].includes(engine) ? engine : (session.engine || 'neural');
+    
+    // Force generative engine universally
+    const finalEngine = 'generative';
 
     console.log(`[turn_submit] Session ${sessionId} | Voice: ${finalVoiceId} | Engine: ${finalEngine}`);
 

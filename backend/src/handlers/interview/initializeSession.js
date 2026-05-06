@@ -54,7 +54,7 @@ exports.handler = async (event) => {
         const itemData = { voiceId };
         if (body.resumeId) itemData.resumeId = body.resumeId;
         if (body.websiteUrl) itemData.websiteUrl = body.websiteUrl;
-        if (body.engine) itemData.engine = body.engine;
+        itemData.engine = body.engine || 'generative';
 
         console.info(`Creating new session ${sessionId} for ${userId} (Module: ${moduleType})`);
         await createSession(sessionId, userId, moduleType, itemData);

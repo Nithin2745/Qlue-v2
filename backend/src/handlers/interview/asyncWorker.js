@@ -50,7 +50,9 @@ async function generateAtomicTurn({
   
   try {
     const voiceId = requestedVoiceId || session.voiceId || 'Tiffany';
-    const engine = requestedEngine || session.engine || 'neural';
+    
+    // Default to generative instead of neural
+    const engine = requestedEngine || session.engine || 'generative';
     
     console.log(`[AtomicTurn] Session ${sessionId} | Turn ${session.turnCount || 0} | Voice: ${voiceId} | Engine: ${engine}`);
 
