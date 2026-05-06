@@ -192,13 +192,15 @@ exports.handler = async (event) => {
       continue;
     }
 
+// 1. Add expectedTurnCount to the destructured message object
     const { 
       connectionId, 
       sessionId, 
       body, 
       voiceId, 
       engine,
-      action 
+      action,
+      expectedTurnCount 
     } = message;
 
     console.log(`[AsyncWorker] Processing ${action} for session ${sessionId}`);
@@ -215,8 +217,9 @@ exports.handler = async (event) => {
         continue;
       }
 
-      if (action === 'turn_submit' && session.turnCount > (body.expectedTurnCount || 0)) {
-        console.warn(`[AsyncWorker] Turn ${body.expectedTurnCount} already processed (current: ${session.turnCount}), skipping`);
+      // 2. Fix the condition to check expectedTurnCount instead of body.expectedTurnCount
+      if (action === 'turn_submit' && session.turnCount > (expectedTurnCount || 0)) {
+        console.warn(`[AsyncWorker] Turn ${expectedTurnCount} already processed (current: ${session.turnCount}), skipping`);
         continue;
       }
 
