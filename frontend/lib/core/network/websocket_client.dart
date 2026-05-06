@@ -51,7 +51,8 @@ class WebSocketClient {
   bool get isConnected => _isConnected;
 
   Future<void> connect({String? authToken}) async {
-    if (_status == WebSocketStatus.connected || _status == WebSocketStatus.connecting) {
+    if (_status == WebSocketStatus.connected ||
+        _status == WebSocketStatus.connecting) {
       return;
     }
 
@@ -61,10 +62,12 @@ class WebSocketClient {
     try {
       // BUG-7 FIX: Store authToken for use in reconnect
       _authToken = authToken;
-      
+
       // Append Firebase auth token as query param
       final wsUrl = authToken != null && authToken.isNotEmpty
-          ? Uri.parse(url).replace(queryParameters: {'token': authToken}).toString()
+          ? Uri.parse(
+              url,
+            ).replace(queryParameters: {'token': authToken}).toString()
           : url;
 
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
@@ -132,21 +135,20 @@ class WebSocketClient {
     _status = WebSocketStatus.reconnecting;
     _reconnectTimer?.cancel();
     final delay = reconnectDelay * math.min(_reconnectAttempts + 1, 15);
-    _reconnectTimer = Timer(
-      delay,
-      () async {
-        _reconnectAttempts++;
-        
-        // BUG-7 FIX: Refresh Firebase token before reconnect
-        try {
-          final newToken = await FirebaseAuth.instance.currentUser?.getIdToken(true);
-          await connect(authToken: newToken);
-        } catch (e) {
-          _errorController.add('Failed to refresh token for reconnect: $e');
-          _scheduleReconnect();
-        }
-      },
-    );
+    _reconnectTimer = Timer(delay, () async {
+      _reconnectAttempts++;
+
+      // BUG-7 FIX: Refresh Firebase token before reconnect
+      try {
+        final newToken = await FirebaseAuth.instance.currentUser?.getIdToken(
+          true,
+        );
+        await connect(authToken: newToken);
+      } catch (e) {
+        _errorController.add('Failed to refresh token for reconnect: $e');
+        _scheduleReconnect();
+      }
+    });
   }
 
   void send(dynamic data) {
@@ -164,7 +166,9 @@ class WebSocketClient {
         _errorController.add('Invalid send payload: $e');
       }
     } else {
-      _errorController.add('Unsupported send payload type: ${data.runtimeType}');
+      _errorController.add(
+        'Unsupported send payload type: ${data.runtimeType}',
+      );
     }
   }
 
@@ -178,7 +182,11 @@ class WebSocketClient {
 
   void _sendMessage(Map<String, dynamic> message) {
     try {
-      final jsonMessage = jsonEncode(message);
+      // Automatically inject the userId into the root of every outgoing message
+      final messageToSend = Map<String, dynamic>.from(message);
+      messageToSend['userId'] = userId;
+
+      final jsonMessage = jsonEncode(messageToSend);
       _channel!.sink.add(jsonMessage);
     } catch (e) {
       _errorController.add('Failed to send message: $e');

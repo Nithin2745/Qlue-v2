@@ -317,7 +317,7 @@ async function handleTerminateSession(connectionId, body, userId) {
   }
 
   try {
-    const { terminateSession } = require('../interview/terminateSession');
+    const terminateSession = require('../interview/terminateSession');
     await terminateSession.handler({
       body: JSON.stringify({ sessionId, reason })
     });

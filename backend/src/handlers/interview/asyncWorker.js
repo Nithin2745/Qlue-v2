@@ -2,7 +2,7 @@ const { handler: generateQuestion, cleanAIResponse } = require('./generateQuesti
 const { synthesizeSpeech } = require('../../lib/polly');
 const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 const { saveTranscript, getTranscriptBySession } = require('../../models/transcript');
-const { processUserInput } = require('./processUserInput');
+const processUserInput = require('./processUserInput');
 const { getResumeById } = require('../../models/resume');
 const { getUserById } = require('../../models/user');
 const { postToConnection } = require('../../lib/websocket');
@@ -77,7 +77,7 @@ async function generateAtomicTurn({
         userData = await getUserById(session.userId);
       }
 
-      const promptResult = await generateQuestion.handler({
+      const promptResult = await generateQuestion({
         body: JSON.stringify({
           sessionId,
           moduleType,
@@ -247,7 +247,7 @@ exports.handler = async (event) => {
         const processBody = JSON.parse(processResult.body);
         
         if (processBody.shouldTerminate) {
-          const { terminateSession } = require('./terminateSession');
+          const terminateSession = require('./terminateSession');
           await terminateSession.handler({
             body: JSON.stringify({ sessionId, reason: 'SILENCE_TIMEOUT' })
           });

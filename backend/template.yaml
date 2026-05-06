@@ -474,6 +474,8 @@ Resources:
   # ==============================================================================
   QlueSharedLayer:
     Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: nodejs24.x
     Properties:
       ContentUri: src/lib/
       CompatibleRuntimes:
