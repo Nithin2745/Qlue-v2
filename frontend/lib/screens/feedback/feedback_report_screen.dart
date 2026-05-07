@@ -42,16 +42,26 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
     }
 
     try {
+      // Use /dashboard/session/{sessionId} which returns both session and feedback data
       final response = await DioClient().dio.get(
-        ApiConstants.feedbackReport,
-        queryParameters: {'sessionId': sId},
+        '${ApiConstants.feedbackReport}/$sId',
       );
       
       if (response.statusCode == 200) {
-        setState(() {
-          _report = FeedbackReportModel.fromJson(response.data['data'] ?? response.data);
-          _isLoading = false;
-        });
+        final data = response.data;
+        // The endpoint returns {session, feedback}
+        final feedbackData = data['feedback'];
+        if (feedbackData != null) {
+          setState(() {
+            _report = FeedbackReportModel.fromJson(feedbackData);
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = "Feedback not yet generated. Please try again later.";
+          });
+        }
       } else {
         throw Exception("Failed to load report: ${response.statusCode}");
       }
@@ -396,21 +406,65 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
   }
 
   Widget _buildTranscriptSection(AppThemeColors t) {
+    // Use transcript from report if available, otherwise show message
+    final transcript = _report?.transcript ?? [];
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSectionTitle(t, "Q&A Transcript", FeatherIcons.messageSquare),
         const SizedBox(height: 20),
-        GlassCard(
-          padding: const EdgeInsets.all(24),
-          borderRadius: 24,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildTranscriptItem(t, "Q: Tell me about your experience with Flutter.", "A: I've been working with Flutter for 3 years, focusing on premium UI..."),
-              const Divider(height: 48, thickness: 1, color: Colors.white12),
-              _buildTranscriptItem(t, "Q: How do you handle State Management?", "A: I prefer using Provider or Bloc depending on the complexity..."),
-            ],
+        transcript.isEmpty
+            ? GlassCard(
+                padding: const EdgeInsets.all(24),
+                borderRadius: 24,
+                child: Center(
+                  child: Text(
+                    "Transcript not available",
+                    style: TextStyle(color: t.textSecondary),
+                  ),
+                ),
+              )
+            : GlassCard(
+                padding: const EdgeInsets.all(24),
+                borderRadius: 24,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: transcript.map((item) {
+                    final isAI = item.role.toUpperCase() == 'AI';
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (transcript.indexOf(item) > 0)
+                          const Divider(height: 48, thickness: 1, color: Colors.white12),
+                        _buildTranscriptItem(t, isAI ? "Q: ${item.text}" : "A: ${item.text}", isAI),
+                      ],
+                    );
+                  }).toList(),
+                ),
+              ),
+      ],
+    );
+  }
+
+  Widget _buildTranscriptItem(AppThemeColors t, String text, bool isQuestion) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          isQuestion ? FeatherIcons.mic : FeatherIcons.user,
+          size: 16,
+          color: isQuestion ? t.primary : t.textSecondary,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              color: t.text,
+              height: 1.5,
+              fontSize: 14,
+            ),
           ),
         ),
       ],

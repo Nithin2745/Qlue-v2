@@ -26,7 +26,7 @@ async function createSession(sessionId, userId, moduleType, itemData = {}) {
         moduleType,
         itemData, // [Mouli Week 4: Context Injection] Store resumeId/websiteUrl context
         voiceId: itemData.voiceId || 'Tiffany',
-        engine: itemData.engine || 'neural',
+        engine: itemData.engine || 'generative',
         currentState: INTERVIEW_STATES.INITIALIZING,
         turnCount: 0,
         startTime: now,

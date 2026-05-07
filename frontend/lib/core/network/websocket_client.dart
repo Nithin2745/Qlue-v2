@@ -130,7 +130,7 @@ class WebSocketClient {
   }
 
   void _scheduleReconnect() {
-    if (_reconnectAttempts >= maxReconnectAttempts) return;
+    if (_intentionalDisconnect || _reconnectAttempts >= maxReconnectAttempts) return;
 
     _status = WebSocketStatus.reconnecting;
     _reconnectTimer?.cancel();
@@ -202,7 +202,10 @@ class WebSocketClient {
     });
   }
 
+  bool _intentionalDisconnect = false;
+
   void disconnect() {
+    _intentionalDisconnect = true;
     _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
     _channel?.sink.close(status.goingAway);

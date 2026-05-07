@@ -41,7 +41,7 @@ exports.handler = async (event) => {
             params.ExclusiveStartKey = {
                 userId: userId,
                 sessionId: lastSessionId,
-                startedAt: parseInt(lastStartedAt)
+                startedAt: lastStartedAt // Use string directly, not parsed as int
             };
         }
 

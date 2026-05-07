@@ -26,6 +26,6 @@ class ApiConstants {
   static const String scraperFetch = '/scraper/fetch';
   static const String websiteValidate = '/website/validate';
   
-  static const String feedbackReport = '/feedback/report';
+  static const String feedbackReport = '/dashboard/session'; // Returns both session and feedback data
   static const String sessionHistory = '/session/history';
 }

@@ -4,7 +4,7 @@ const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(client);
 
-const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'Sessions';
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'qlue-sessions';
 
 function getCutoffDate(periodStr) {
     const now = new Date();

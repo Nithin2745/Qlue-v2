@@ -103,7 +103,6 @@ async function handleSessionInit(connectionId, body, userId) {
     // BUG-4 FIX: Use UpdateCommand with attribute_not_exists to prevent overwrite race
     const dynamodb = require('../../lib/dynamodb');
     const { docClient } = require('../../lib/dynamodb');
-    const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
     
     try {
       await docClient.send(new UpdateCommand({

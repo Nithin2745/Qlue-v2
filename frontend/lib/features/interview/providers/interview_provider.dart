@@ -176,8 +176,14 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
     _safeNotify();
   }
 
+  Timer? _safetyTimer;
+  
   void _startListening() {
     if (isListening) return;
+    
+    // Cancel any pending safety timer from previous turn
+    _safetyTimer?.cancel();
+    
     isListening = true;
     _sttService.startListening(
       onPartial: (text) {
@@ -187,6 +193,7 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
       onFinal: (text) {
         finalTranscript = text;
         isListening = false;
+        _safetyTimer?.cancel(); // Cancel safety timer on successful completion
         if (text.isEmpty) {
           _silenceStrikes++;
         } else {
@@ -198,7 +205,7 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
     );
 
     // Safety timeout - force submit if onFinal never fires
-    Future.delayed(const Duration(seconds: 35), () {
+    _safetyTimer = Timer(const Duration(seconds: 35), () {
       if (isListening && !_sttService.isListening) {
         // STT stopped without calling onFinal — force submit
         debugPrint('STT timeout: forcing submit after silence');
@@ -343,6 +350,9 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
   Future<void> endSession() async {
     if (isSessionEnded) return;
 
+    // Save sessionId before resetForNewSession() clears it
+    final savedSessionId = sessionId;
+    
     terminateSession();
     
     // FIX: Give the WebSocket 300ms to physically send the termination message 
@@ -352,6 +362,9 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
     isSessionEnded = true;
     // resetForNewSession() already calls _cleanup() internally
     resetForNewSession();
+    
+    // Restore sessionId for navigation to feedback screen
+    sessionId = savedSessionId;
 
     _safeNotify();
   }

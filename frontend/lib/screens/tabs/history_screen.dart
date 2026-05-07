@@ -78,7 +78,7 @@ class TimelineSessionCard extends StatelessWidget {
           // Content Card
           Expanded(
           child: GestureDetector(
-          onTap: () => context.push('/feedback/${s.sessionId}'),
+          onTap: () => context.push('/feedback/${s.sessionId}', extra: s),
           child: Container(
             margin: const EdgeInsets.only(bottom: 24),
             child: GlassCard(
@@ -250,7 +250,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                          const SizedBox(width: 8),
                          _buildBadge(t, "Avg", "$avgScore%"),
                          const SizedBox(width: 8),
-                         _buildBadge(t, "Streak", "5d"),
+                         _buildBadge(t, "Streak", "${_calculateStreak(sessions)}d"),
                        ],
                      ),
                      const SizedBox(height: 32),
@@ -278,6 +278,41 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       ),
     );
+  }
+
+  int _calculateStreak(List<SessionModel> sessions) {
+    if (sessions.isEmpty) return 0;
+    
+    // Sort sessions by date (most recent first)
+    final sorted = List<SessionModel>.from(sessions)
+      ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    
+    int streak = 0;
+    DateTime? expectedDate = DateTime.now();
+    
+    for (final session in sorted) {
+      final sessionDate = DateTime(
+        session.startedAt.year,
+        session.startedAt.month,
+        session.startedAt.day,
+      );
+      final currentExpected = DateTime(
+        expectedDate!.year,
+        expectedDate.month,
+        expectedDate.day,
+      );
+      
+      if (sessionDate.isAtSameMomentAs(currentExpected)) {
+        streak++;
+        expectedDate = expectedDate.subtract(const Duration(days: 1));
+      } else if (sessionDate.isBefore(currentExpected)) {
+        // Gap in streak
+        break;
+      }
+      // If sessionDate is after expectedDate, skip (shouldn't happen with proper sorting)
+    }
+    
+    return streak;
   }
 
   PopupMenuItem<String> _buildPopupItem(AppThemeColors t, String val, IconData icon) {

@@ -1,4 +1,10 @@
 const { getTranscriptBySession } = require('../../models/transcript');
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient, GetCommand } = require("@aws-sdk/lib-dynamodb");
+
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'qlue-sessions';
 
 /**
  * AWS Lambda Handler: GET /dashboard/transcript/{sessionId}
@@ -22,11 +28,23 @@ exports.handler = async (event) => {
             };
         }
 
+        // SECURITY FIX: Verify user owns the session before returning transcript
+        const sessionCmd = new GetCommand({
+            TableName: SESSIONS_TABLE,
+            Key: { sessionId }
+        });
+        const sessionRes = await docClient.send(sessionCmd);
+        const session = sessionRes.Item;
+
+        if (!session || session.userId !== userId) {
+            return {
+                statusCode: 403,
+                body: JSON.stringify({ error: 'FORBIDDEN', message: 'You do not have access to this transcript' })
+            };
+        }
+
         // Fetch transcript from DB
         const transcript = await getTranscriptBySession(sessionId);
-
-        // Note: For production, we'd verify the user owns the session before returning transcript.
-        // This is handled via the GSI_SessionIdTurnIndex which is partitioned by sessionId.
 
         return {
             statusCode: 200,

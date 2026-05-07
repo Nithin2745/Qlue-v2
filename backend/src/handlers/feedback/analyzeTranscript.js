@@ -11,7 +11,8 @@ const MODULE_DIMENSIONS = {
   RESUME: ['clarity', 'fluency', 'technicalVocabulary', 'useOfExamples'],
   HR: ['teamwork', 'ethicalThinking', 'problemSolving', 'communicationClarity', 'selfAwareness'],
   WEBSITE: ['comprehensionAccuracy', 'learningProgression', 'criticalThinking', 'responseClarity', 'conceptRetention'],
-  SELF_INTRO: ['clarity', 'structure', 'confidence', 'relevance']
+  INTRO: ['clarity', 'structure', 'confidence', 'relevance'],
+  SELF_INTRO: ['clarity', 'structure', 'confidence', 'relevance'] // Alias for backward compatibility
 };
 
 exports.handler = async (event) => {
