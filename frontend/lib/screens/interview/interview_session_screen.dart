@@ -66,10 +66,10 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
     _providerListener = () {
       if (mounted) {
-        _simulateIntensity(provider.currentPhase);
+        _simulateIntensity(_provider.currentPhase);
       }
     };
-    provider.addListener(_providerListener);
+    _provider.addListener(_providerListener);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
@@ -77,7 +77,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
         throw ArgumentError('Invalid moduleType');
       }
 
-      provider.initSession(
+      _provider.initSession(
         type,
         resumeId: widget.resumeId,
         websiteUrl: widget.websiteUrl,
