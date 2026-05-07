@@ -25,7 +25,8 @@ class FeedbackReportModel {
         (key, value) => MapEntry(key, (value as num).toDouble()),
       ) ?? {},
       strengths: List<String>.from(json['strengths'] ?? []),
-      weaknesses: List<String>.from(json['weaknesses'] ?? []),
+      // Handle both 'weaknesses' and 'improvements' keys from backend
+      weaknesses: List<String>.from(json['weaknesses'] ?? json['improvements'] ?? []),
       recommendations: List<String>.from(json['recommendations'] ?? []),
       executiveSummary: json['executiveSummary'] ?? 'No summary available.',
     );

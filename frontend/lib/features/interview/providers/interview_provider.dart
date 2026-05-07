@@ -155,9 +155,11 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
         _safeNotify();
       });
     } else {
-      errorMessage = 'Audio unavailable. Question: $questionText';
-      _currentPhase = InterviewPhase.error;
+      // No audio available — still show question and allow user to respond
+      debugPrint('No audio available for question, proceeding to listening phase');
+      _currentPhase = InterviewPhase.listening;
       _safeNotify();
+      _startListening();
     }
   }
 
@@ -348,7 +350,7 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
     await Future.delayed(const Duration(milliseconds: 300));
 
     isSessionEnded = true;
-    _cleanup();
+    // resetForNewSession() already calls _cleanup() internally
     resetForNewSession();
 
     _safeNotify();

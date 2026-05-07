@@ -36,6 +36,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
   bool _isEnding = false;
   bool _hasNavigated = false;
 
+  late InterviewProvider _provider;
   late VoidCallback _providerListener;
 
   @override
@@ -43,8 +44,8 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     super.initState();
 
     // CRITICAL: Reset provider to prevent redirect from old session
-    final provider = context.read<InterviewProvider>();
-    provider.resetForNewSession();
+    _provider = context.read<InterviewProvider>();
+    _provider.resetForNewSession();
 
     _animationController = AnimationController(
       vsync: this,
@@ -139,7 +140,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
   @override
   void dispose() {
-    context.read<InterviewProvider>().removeListener(_providerListener);
+    _provider.removeListener(_providerListener);
     _animationController.dispose();
     _intensityController.dispose();
     super.dispose();
