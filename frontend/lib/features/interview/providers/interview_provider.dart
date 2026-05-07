@@ -124,7 +124,6 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
 
     if (audioUrl?.isNotEmpty == true) {
       _ttsService.playUrl(audioUrl!)
-          // 🔴 FIX: Increase timeout to 60 seconds so the AI doesn't crash the app
           .timeout(const Duration(seconds: 60), onTimeout: () {
         throw TimeoutException('Audio playback timed out');
       })
@@ -141,7 +140,6 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
       });
     } else if (audioData != null && audioData.isNotEmpty) {
       _ttsService.playBase64(audioData)
-          // 🔴 FIX: Increase fallback timeout to 60 seconds
           .timeout(const Duration(seconds: 60), onTimeout: () {
         throw TimeoutException('Audio playback timed out');
       })
@@ -197,7 +195,7 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
       },
     );
 
-    // 🔴 FIX Bug #1: Safety timeout - force submit if onFinal never fires
+    // Safety timeout - force submit if onFinal never fires
     Future.delayed(const Duration(seconds: 35), () {
       if (isListening && !_sttService.isListening) {
         // STT stopped without calling onFinal — force submit

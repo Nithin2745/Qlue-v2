@@ -274,7 +274,7 @@ exports.handler = async (event) => {
           continue;
         }
 
-        // 🔴 FIX Bug #15: Re-fetch session to get updated turnCount after processUserInput
+        // Re-fetch session to get updated turnCount after processUserInput
         const updatedSession = await getSessionById(sessionId);
         if (!updatedSession) {
           console.error(`[AsyncWorker] Session ${sessionId} not found after processUserInput`);
@@ -284,7 +284,7 @@ exports.handler = async (event) => {
         await generateAtomicTurn({
           connectionId,
           sessionId,
-          session: updatedSession,  // Use fresh session with updated turnCount
+          session: updatedSession,
           moduleType: updatedSession.moduleType,
           preGeneratedText: processBody.nextAIResponse,
           voiceId,

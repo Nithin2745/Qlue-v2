@@ -11,19 +11,16 @@ class SttService {
     _isInitialized = await _speech.initialize(
       onError: (error) {
         print('STT Error: $error');
-        // 🔴 FIX Bug #2: Log recoverable errors for debugging
         if (error.errorMsg == 'no_match' || error.errorMsg == 'busy') {
           print('STT: Recoverable error, continuing...');
         }
       },
       onStatus: (status) {
         print('STT Status: $status');
-        // Status 'done' without onFinal means STT timed out
         if (status == 'done') {
           print('STT: Listening done (may have timed out)');
         }
       },
-      cancelOnError: false, // 🔴 FIX: Keep listening even after errors
     );
 
     return _isInitialized;
@@ -43,11 +40,11 @@ class SttService {
           onPartial(result.recognizedWords);
         }
       },
-      listenFor: const Duration(seconds: 60),  // 🔴 FIX: Increased from 30s
-      pauseFor: const Duration(seconds: 8),    // 🔴 FIX: Increased from 5s for thoughtful answers
+      listenFor: const Duration(seconds: 60),
+      pauseFor: const Duration(seconds: 8),
       partialResults: true,
       localeId: 'en_US',
-      listenMode: ListenMode.dictation,  // 🔴 FIX: Better for free-form speech
+      listenMode: ListenMode.dictation,
     );
   }
 

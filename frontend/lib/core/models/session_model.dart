@@ -18,7 +18,7 @@ class SessionModel {
   });
 
   factory SessionModel.fromJson(Map<String, dynamic> json) {
-    // 🔴 FIX Bug #6: Handle both 'startedAt' (millis) and 'startTime' (ISO string)
+    // Handle both 'startedAt' (millis) and 'startTime' (ISO string)
     DateTime parseStartedAt() {
       if (json['startedAt'] != null) {
         return DateTime.fromMillisecondsSinceEpoch(json['startedAt'] as int);

@@ -16,11 +16,9 @@ class TtsService {
       await _player.setAudioSource(AudioSource.uri(Uri.parse(url)));
       await _player.play();
 
-      // 🔴 FIX Bug #4: Handle web platform where completed state may not fire
-      // Use duration-based completion OR processing state, whichever comes first
+      // Handle web platform where completed state may not fire
       final duration = _player.duration;
       if (duration != null) {
-        // Wait for duration + small buffer for playback to complete
         await Future.any([
           _player.processingStateStream
               .firstWhere((state) => 
@@ -29,7 +27,6 @@ class TtsService {
           Future.delayed(duration + const Duration(milliseconds: 500)),
         ]);
       } else {
-        // Fallback: wait for completed state with timeout
         await _player.processingStateStream
             .firstWhere((state) => 
                 state == ProcessingState.completed || state == ProcessingState.idle)

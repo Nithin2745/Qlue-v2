@@ -83,7 +83,7 @@ exports.handler = async (event) => {
     }
 
     // Preserve the current session state while persisting concept selection and reset silence retries
-    // 🔴 FIX Bug #17: Increment turnCount so generateAtomicTurn uses correct turn index
+    // Increment turnCount so generateAtomicTurn uses correct turn index
     await updateSessionState(sessionId, session.currentState, null, {
       currentConceptId: currentConceptId || session.currentConceptId,
       silenceRetries: 0,
