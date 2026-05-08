@@ -4,7 +4,7 @@
 const { createFeedbackReport } = require('../../models/feedback');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 
-const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'ap-south-1' });
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const NOTIFY_LAMBDA = process.env.SEND_NOTIFICATION_LAMBDA;
 
 exports.handler = async (event) => {

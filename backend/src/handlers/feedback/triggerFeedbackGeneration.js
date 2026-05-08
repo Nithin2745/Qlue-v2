@@ -4,8 +4,8 @@
 const ddb = require('../../lib/dynamodb');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 
-const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'ap-south-1' });
-const TRANSCRIPT_TABLE = process.env.TRANSCRIPT_TABLE || 'Transcripts';
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const TRANSCRIPT_TABLE = process.env.TRANSCRIPTS_TABLE || 'qlue-transcripts';
 const ANALYZE_LAMBDA = process.env.ANALYZE_TRANSCRIPT_LAMBDA;
 
 exports.handler = async (event) => {

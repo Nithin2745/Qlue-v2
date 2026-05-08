@@ -26,18 +26,33 @@ exports.handler = async (event) => {
       console.info(`User ${userId} already has an active connection ${oldConnection.connectionId}. Deactivating old and notifying.`);
       
       // Notify old connection about the new one (reconnection)
-      await postToConnection(oldConnection.connectionId, {
-        type: 'error',
-        payload: {
-          errorCode: 'RECONNECTED_ELSEWHERE',
-          message: 'You have been disconnected because a new connection was established on another device.',
-          recoverable: false,
-          suggestedAction: 'RECONNECT'
-        }
-      });
+      try {
+        await postToConnection(oldConnection.connectionId, {
+          type: 'error',
+          payload: {
+            errorCode: 'RECONNECTED_ELSEWHERE',
+            message: 'You have been disconnected because a new connection was established on another device.',
+            recoverable: false,
+            suggestedAction: 'RECONNECT'
+          }
+        });
+      } catch (notifyError) {
+        console.warn('Failed to notify old connection:', notifyError);
+      }
 
-      // Deactivate old connection
-      await deactivateConnection(oldConnection.connectionId);
+      // BUG-5 FIX: Use conditional write to prevent race condition
+      // Only deactivate if it's still marked as active (prevent multiple concurrent deactivations)
+      try {
+        await deactivateConnection(oldConnection.connectionId, { 
+          expectedIsActive: 'true' 
+        });
+      } catch (deactivateErr) {
+        if (deactivateErr.name === 'ConditionalCheckFailedException') {
+          console.info(`Old connection ${oldConnection.connectionId} was already deactivated by another request`);
+        } else {
+          console.warn('Failed to deactivate old connection:', deactivateErr);
+        }
+      }
     }
 
     // 3. Register new connection

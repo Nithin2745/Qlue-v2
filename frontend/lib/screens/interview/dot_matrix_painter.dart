@@ -61,6 +61,10 @@ class AiDotMatrixPainter extends CustomPainter {
              }
           }
 
+          if (intensity > 0.0 && !isInwards && baseColor != Colors.green) { 
+             state += (math.Random().nextDouble() * 0.15); 
+          }          
+
           // INTERACTIVE TAP RIPPLE - Snappy Hardware Response
           if (tapOffset != null) {
              final double duration = 0.8; // Shorter, more professional burst
@@ -84,14 +88,14 @@ class AiDotMatrixPainter extends CustomPainter {
           state += coreGlow * (intensity * 0.5);
 
           final double clampedState = state.clamp(0.02, 1.0);
-          dotPaint.color = baseColor.withOpacity(clampedState);
+          dotPaint.color = baseColor.withValues(alpha: clampedState);
           
           final double r = 1.6 + 2.8 * (clampedState * clampedState);
           canvas.drawCircle(pos, r, dotPaint);
 
           if (clampedState > 0.8) {
              canvas.drawCircle(pos, r + 1, Paint()
-               ..color = baseColor.withOpacity(clampedState * 0.2)
+               ..color = baseColor.withValues(alpha: clampedState * 0.2)
                ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
           }
        }
@@ -103,8 +107,8 @@ class AiDotMatrixPainter extends CustomPainter {
     
     final gradient = RadialGradient(
       colors: [
-        baseColor.withOpacity(0.15 + intensity * 0.1), // was 0.2 + intensity * 0.25
-        baseColor.withOpacity(0.05),
+        baseColor.withValues(alpha: 0.15 + intensity * 0.1), // was 0.2 + intensity * 0.25
+        baseColor.withValues(alpha: 0.05),
         Colors.transparent,
       ],
       stops: const [0.2, 0.5, 1.0],

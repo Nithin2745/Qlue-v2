@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:frontend/context/auth_provider.dart';
 import 'package:go_router/go_router.dart';
 import 'dot_matrix_painter.dart';
 import '../../core/theme.dart';
@@ -36,6 +37,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
   bool _isEnding = false;
   bool _hasNavigated = false;
 
+  late InterviewProvider _provider;
   late VoidCallback _providerListener;
 
   @override
@@ -43,8 +45,8 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     super.initState();
 
     // CRITICAL: Reset provider to prevent redirect from old session
-    final provider = context.read<InterviewProvider>();
-    provider.resetForNewSession();
+    _provider = context.read<InterviewProvider>();
+    _provider.resetForNewSession();
 
     _animationController = AnimationController(
       vsync: this,
@@ -65,16 +67,22 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
     _providerListener = () {
       if (mounted) {
-        _simulateIntensity(provider.currentPhase);
+        _simulateIntensity(_provider.currentPhase);
       }
     };
-    provider.addListener(_providerListener);
+    _provider.addListener(_providerListener);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final type = widget.moduleType ?? (widget.resumeId != null ? 'RESUME' : (widget.websiteUrl != null ? 'WEBSITE' : 'HR'));
-      assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
+      if (!(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO')) {
+        throw ArgumentError('Invalid moduleType');
+      }
 
-      provider.initSession(
+      // Fetch the auth provider to get the selected voice
+      final authProvider = context.read<AuthProvider>();
+      _provider.setVoice(authProvider.voiceId, engine: 'generative');
+
+      _provider.initSession(
         type,
         resumeId: widget.resumeId,
         websiteUrl: widget.websiteUrl,
@@ -137,7 +145,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
   @override
   void dispose() {
-    context.read<InterviewProvider>().removeListener(_providerListener);
+    _provider.removeListener(_providerListener);
     _animationController.dispose();
     _intensityController.dispose();
     super.dispose();
@@ -200,12 +208,16 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
     // Determine sphere color
     Color sphereColor;
+    bool isProcessing = provider.currentPhase == InterviewPhase.processing;
+    
     if (isConnecting) {
-      sphereColor = Colors.white;
+      sphereColor = Colors.white70; // Off-white glow
     } else if (isAiSpeaking) {
-      sphereColor = t.emeraldPrimary; // Blue-ish emerald when AI speaks
+      sphereColor = t.emeraldPrimary; // Green
     } else if (isListening) {
-      sphereColor = Colors.orangeAccent; // Orange when listening
+      sphereColor = Colors.orangeAccent; // Orange
+    } else if (isProcessing) {
+      sphereColor = t.primary; // Processing color (blue/purple)
     } else {
       sphereColor = Colors.white;
     }

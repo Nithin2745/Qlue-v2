@@ -15,7 +15,7 @@ const bedrockClient = new BedrockRuntimeClient({
 });
 
 // The required Model ID
-const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'nvidia.nemotron-super-3-120b';
+const DEFAULT_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-sonnet-20240229-v1:0';
 
 /**
  * Executes a Model Invocation using Converse API

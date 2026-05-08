@@ -1,9 +1,8 @@
 const { getSession, updateSessionState } = require('../models/session');
 const { SPEAKERS, saveTranscript, getTranscriptBySession } = require('../models/transcript');
-const { transitionState, INTERVIEW_STATES } = require('../handlers/interview/controlTurnFlow');
+const { INTERVIEW_STATES } = require('../handlers/interview/controlTurnFlow');
 const { invokeModel, buildScoringPrompt, buildWebsiteTeachPrompt, buildSelfIntroEvalPrompt } = require('../lib/bedrock');
 const { CONCEPT_STATES, updateConceptState } = require('../models/conceptState');
-const { fetchAndCleanContent } = require('../lib/scraper');
 const { getConceptsBySession } = require('../models/conceptState');
 
 /**
@@ -13,7 +12,7 @@ function parseBedrockJSON(text) {
     if (!text) return {};
     try {
         // Find the first { and the last }
-        const match = text.match(/\{[\s\S]*\}/);
+        const match = text.match(/\{[\s\S]*?\}/);
         if (match) {
             return JSON.parse(match[0]);
         }
@@ -36,7 +35,7 @@ async function processUserTurn(sessionId, textTranscript, isSilence, currentConc
 
     // --- 1. SILENCE NEGOTIATION W/ RETRIES ---
     if (isSilence) {
-        await transitionState(sessionId, INTERVIEW_STATES.SILENCE_DETECTED);
+        await updateSessionState(sessionId, INTERVIEW_STATES.SILENCE_DETECTED, session.currentState);
         const silRetries = (session.silenceRetries || 0) + 1;
         
         if (silRetries >= 3) {
@@ -47,7 +46,7 @@ async function processUserTurn(sessionId, textTranscript, isSilence, currentConc
             ? "Are you still there? I'm listening whenever you're ready." 
             : "I haven't heard anything. Take your time, let me know if you need me to repeat the question or if you want to wrap up.";
         
-        await transitionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, { silenceRetries: silRetries });
+        await updateSessionState(sessionId, INTERVIEW_STATES.AI_SPEAKING, INTERVIEW_STATES.SILENCE_DETECTED, { silenceRetries: silRetries });
 
         return {
             nextAIResponse: retryMessage,

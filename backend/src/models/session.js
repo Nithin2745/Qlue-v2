@@ -1,7 +1,7 @@
 const { docClient } = require('../lib/dynamodb');
 const { PutCommand, UpdateCommand, GetCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
 
-const SESSIONS_TABLE = process.env.SESSIONS_TABLE || "Sessions";
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'qlue-sessions';
 
 const INTERVIEW_STATES = {
     INITIALIZING: "INITIALIZING",
@@ -26,6 +26,7 @@ async function createSession(sessionId, userId, moduleType, itemData = {}) {
         moduleType,
         itemData, // [Mouli Week 4: Context Injection] Store resumeId/websiteUrl context
         voiceId: itemData.voiceId || 'Tiffany',
+        engine: itemData.engine || 'generative',
         currentState: INTERVIEW_STATES.INITIALIZING,
         turnCount: 0,
         startTime: now,
@@ -108,6 +109,13 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
         expressionAttributeValues[":turnCount"] = updates.turnCount;
     }
 
+    // BUG-10 FIX: Support atomic increment for turnCount to prevent race conditions
+    if (updates.incrementTurnCount) {
+        updateExpression += ", turnCount = if_not_exists(turnCount, :zero) + :inc";
+        expressionAttributeValues[":zero"] = 0;
+        expressionAttributeValues[":inc"] = 1;
+    }
+
     if (updates.expectedTurnCount !== undefined) {
         if (conditionExpression) {
             conditionExpression += " AND turnCount = :expectedTurnCount";
@@ -138,6 +146,21 @@ async function updateSessionState(sessionId, newState, expectedCurrentState = nu
     if (updates.currentConceptId !== undefined) {
         updateExpression += ", currentConceptId = :currentConceptId";
         expressionAttributeValues[":currentConceptId"] = updates.currentConceptId;
+    }
+
+    if (updates.voiceId !== undefined) {
+        updateExpression += ", voiceId = :voiceId";
+        expressionAttributeValues[":voiceId"] = updates.voiceId;
+    }
+
+    if (updates.engine !== undefined) {
+        updateExpression += ", engine = :engine";
+        expressionAttributeValues[":engine"] = updates.engine;
+    }
+
+    if (updates.connectionId !== undefined) {
+        updateExpression += ", connectionId = :connectionId";
+        expressionAttributeValues[":connectionId"] = updates.connectionId;
     }
 
     if (updates.scrapedSummary !== undefined) {
@@ -172,6 +195,7 @@ module.exports = {
     INTERVIEW_STATES,
     createSession,
     getSession,
+    getSessionById: getSession,
     updateSessionState,
     getActiveSessionForUser
 };

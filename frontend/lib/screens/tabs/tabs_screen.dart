@@ -52,24 +52,26 @@ class _TabsScreenState extends State<TabsScreen> {
           if (MediaQuery.of(context).viewInsets.bottom == 0)
             Align(
               alignment: Alignment.bottomCenter,
-              child: GlassCard(
-                margin: const EdgeInsets.only(bottom: 30, left: 24, right: 24),
-                borderRadius: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                hasGlow: true,
-                glowColor: t.primary,
-                glowRadius: 50,
-                blurSigma: 30,
-                hasMetallicBorder: true,
-                child: SizedBox(
-                  height: 72,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _buildNavItem(0, FeatherIcons.home, "Performance", t, currentIndex),
-                      _buildNavItem(1, FeatherIcons.zap, "Practice", t, currentIndex),
-                      _buildNavItem(2, FeatherIcons.clock, "Previous", t, currentIndex),
-                    ],
+              child: RepaintBoundary(
+                child: GlassCard(
+                  margin: const EdgeInsets.only(bottom: 30, left: 24, right: 24),
+                  borderRadius: 40,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                  hasGlow: true,
+                  glowColor: t.primary,
+                  glowRadius: 50,
+                  blurSigma: 15,
+                  hasMetallicBorder: true,
+                  child: SizedBox(
+                    height: 72,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildNavItem(0, FeatherIcons.home, "Performance", t, currentIndex),
+                        _buildNavItem(1, FeatherIcons.zap, "Practice", t, currentIndex),
+                        _buildNavItem(2, FeatherIcons.clock, "Previous", t, currentIndex),
+                      ],
+                    ),
                   ),
                 ),
               ),

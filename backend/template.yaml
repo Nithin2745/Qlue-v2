@@ -4,7 +4,7 @@ Description: Qlue AI-powered voice interview simulation mobile app.
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs24.x
     Layers:
       - !Ref QlueSharedLayer
       - !Ref AppDependenciesLayer
@@ -21,6 +21,7 @@ Globals:
         NOTIFICATIONS_TABLE: !Ref NotificationsTable
         RESUMES_BUCKET: !Ref ResumesBucket
         SCRAPED_CONTENT_BUCKET: !Ref ScrapedContentBucket
+        AUDIO_BUCKET: !Ref AudioBucket
         FEEDBACK_TOPIC_ARN: !Ref FeedbackTriggerTopic
         WEBSOCKET_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
         BEDROCK_MODEL_ID: 'nvidia.nemotron-super-3-120b'
@@ -91,8 +92,6 @@ Resources:
           AttributeType: S
         - AttributeName: startedAt
           AttributeType: N
-        - AttributeName: status
-          AttributeType: S
         - AttributeName: activeMarker
           AttributeType: S
       KeySchema:
@@ -119,7 +118,7 @@ Resources:
           KeySchema:
             - AttributeName: userId
               KeyType: HASH
-            - AttributeName: status
+            - AttributeName: activeMarker
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
@@ -339,6 +338,26 @@ Resources:
             Status: Enabled
             ExpirationInDays: 30
 
+  AudioBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDeleteAudio
+            Status: Enabled
+            ExpirationInDays: 7
+
   # ==============================================================================
   # API GATEWAYS
   # ==============================================================================
@@ -455,20 +474,22 @@ Resources:
   # ==============================================================================
   QlueSharedLayer:
     Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: nodejs24.x
     Properties:
       ContentUri: src/lib/
       CompatibleRuntimes:
-        - nodejs20.x
+        - nodejs24.x
       RetentionPolicy: Retain
 
   AppDependenciesLayer:
     Type: AWS::Serverless::LayerVersion
     Metadata:
-      BuildMethod: nodejs20.x
+      BuildMethod: nodejs24.x
     Properties:
       ContentUri: layers/dependencies/
       CompatibleRuntimes:
-        - nodejs20.x
+        - nodejs24.x
       RetentionPolicy: Retain
 
 
@@ -946,16 +967,8 @@ Resources:
             Method: post
             RestApiId: !Ref RestApi
       Policies:
-        - DynamoDBCrudPolicy: { TableName: !Ref UsersTable }
         - DynamoDBCrudPolicy: { TableName: !Ref SessionsTable }
         - DynamoDBCrudPolicy: { TableName: !Ref TranscriptsTable }
-        - DynamoDBCrudPolicy: { TableName: !Ref FeedbackTable }
-        - DynamoDBCrudPolicy: { TableName: !Ref ConceptStatesTable }
-        - DynamoDBCrudPolicy: { TableName: !Ref ResumesTable }
-        - Statement: [{ Effect: Allow, Action: ['polly:SynthesizeSpeech'], Resource: '*' }]
-        - Statement: [{ Effect: Allow, Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], Resource: '*' }]
-        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref BedrockConfigSecret }
-        - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
 
 
   GenerateQuestionFunction:
@@ -1070,10 +1083,18 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
 
+  AsyncInterviewDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
   AsyncInterviewQueue:
     Type: AWS::SQS::Queue
     Properties:
-      VisibilityTimeout: 900 # Matches Lambda timeout + buffer
+      VisibilityTimeout: 180 # 3 minutes for real-time interview retry
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AsyncInterviewDLQ.Arn
+        maxReceiveCount: 3
 
   AsyncInterviewWorkerFunction:
     Type: AWS::Serverless::Function
@@ -1081,7 +1102,7 @@ Resources:
       Handler: handlers/interview/asyncWorker.handler
       CodeUri: src/
       MemorySize: 1024
-      Timeout: 900
+      Timeout: 30
       Events:
         SQSEvent:
           Type: SQS
@@ -1103,6 +1124,7 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
         - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - S3CrudPolicy: { BucketName: !Ref AudioBucket }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
       Environment:
         Variables:
@@ -1160,6 +1182,7 @@ Resources:
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref FirebaseServiceAccountSecret }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt FeedbackTriggerTopic.TopicName }
         - S3CrudPolicy: { BucketName: !Ref ScrapedContentBucket }
+        - S3CrudPolicy: { BucketName: !Ref AudioBucket }
         - AWSSecretsManagerGetSecretValuePolicy: { SecretArn: !Ref ScraperApiKeySecret }
         - Statement: [{ Effect: Allow, Action: ['sqs:SendMessage'], Resource: !GetAtt AsyncInterviewQueue.Arn }]
 
@@ -1195,6 +1218,9 @@ Resources:
       CodeUri: src/
       MemorySize: 256
       Timeout: 15
+      Environment:
+        Variables:
+          ANALYZE_TRANSCRIPT_LAMBDA: !Ref AnalyzeTranscriptFunction
       Events:
         SNSTrigger:
           Type: SNS

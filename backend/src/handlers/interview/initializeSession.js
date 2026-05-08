@@ -54,7 +54,7 @@ exports.handler = async (event) => {
         const itemData = { voiceId };
         if (body.resumeId) itemData.resumeId = body.resumeId;
         if (body.websiteUrl) itemData.websiteUrl = body.websiteUrl;
-        if (body.engine) itemData.engine = body.engine;
+        itemData.engine = body.engine || 'generative';
 
         console.info(`Creating new session ${sessionId} for ${userId} (Module: ${moduleType})`);
         await createSession(sessionId, userId, moduleType, itemData);
@@ -64,9 +64,13 @@ exports.handler = async (event) => {
         const wsHttpEndpoint = process.env.WEBSOCKET_ENDPOINT || '';
         let wsUrl = '';
         if (wsHttpEndpoint) {
-          wsUrl = wsHttpEndpoint.startsWith('https://') 
-            ? wsHttpEndpoint.replace('https://', 'wss://') 
-            : wsHttpEndpoint;
+          if (wsHttpEndpoint.startsWith('https://')) {
+            wsUrl = wsHttpEndpoint.replace('https://', 'wss://');
+          } else if (wsHttpEndpoint.startsWith('http://')) {
+            wsUrl = wsHttpEndpoint.replace('http://', 'ws://');
+          } else {
+            wsUrl = wsHttpEndpoint;
+          }
         } else {
           wsUrl = process.env.WS_FALLBACK_URL || '';
         }

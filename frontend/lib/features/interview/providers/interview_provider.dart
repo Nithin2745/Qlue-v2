@@ -1,16 +1,14 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/constants/api_constants.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/websocket_client.dart';
-import '../../../core/constants/api_constants.dart';
-import '../../../core/constants/app_constants.dart';
 import '../../../shared/services/stt_service.dart';
 import '../../../shared/services/tts_service.dart';
 
-
-enum InterviewPhase { ready, speaking, listening, processing }
+enum InterviewPhase { ready, speaking, listening, processing, error }
 
 class TranscriptEntry {
   final String role;
@@ -21,432 +19,378 @@ class TranscriptEntry {
 }
 
 class InterviewProvider extends ChangeNotifier {
+  InterviewPhase _currentPhase = InterviewPhase.ready;
+  InterviewPhase get currentPhase => _currentPhase;
+
   String? sessionId;
   String? moduleType;
-  String? currentConceptId; // Bug 5: Track current concept for WEBSITE mode
-  InterviewPhase currentPhase = InterviewPhase.ready;
-  int currentTurnIndex = 0;
-  
-  String questionText = "...";
-  String finalQuestionText = ""; // The finalized question shown after AI stops speaking
-  // The streaming subtitle text (shown while AI is speaking)
-  String subtitleText = "";
-  // Whether we're currently streaming AI text
-  bool isStreamingText = false;
-  
+  String? currentQuestion;
+  String? audioUrl;
   List<TranscriptEntry> transcript = [];
+  String? errorMessage;
+  String _selectedVoiceId = 'Tiffany';
+  String _selectedEngine = 'generative';
+
+  String get selectedVoiceId => _selectedVoiceId;
+  String get selectedEngine => _selectedEngine;
+
+  void setVoice(String voiceId, {String engine = 'generative'}) {
+    _selectedVoiceId = voiceId;
+    _selectedEngine = engine;
+    _safeNotify();
+  }
+
+  // Additional properties for screen compatibility
+  String questionText = "...";
+  String finalQuestionText = "";
+  String subtitleText = "";
+  bool isStreamingText = false;
   String partialTranscript = "";
-  String finalTranscript = ""; // Last finalized user transcript for display
-  
+  String finalTranscript = "";
   bool isConnecting = false;
   bool isListening = false;
-  String? errorMessage;
   bool isSessionEnded = false;
-
   int _silenceStrikes = 0;
   int get silenceStrikes => _silenceStrikes;
-  Timer? _silenceTimer;
 
+  WebSocketClient? _wsClient;
   final SttService _sttService = SttService();
   final TtsService _ttsService = TtsService();
-  final WebSocketClient _wsClient = WebSocketClient();
-  bool _isStartingListening = false;
-  bool _isTurnLocked = false; // NEW: half-duplex lock
-  bool _isCleanedUp = false;
-  Timer? _watchdogTimer;
-  Timer? _heartbeatTimer;
-  String _voiceId = 'Tiffany';
-  String _engine = 'generative';
 
-  /// Safe wrapper for notifyListeners that handles disposal errors
+  StreamSubscription? _wsSubscription;
+
+  InterviewProvider();
+
+  void _initWebSocket() {
+    if (_wsClient == null) return;
+    _wsSubscription = _wsClient!.messages.listen(_handleWebSocketMessage);
+    _wsClient!.errors.listen((error) {
+      errorMessage = error;
+      _safeNotify();
+    });
+    _wsClient!.disconnects.listen((_) {
+      isSessionEnded = true;
+      _currentPhase = InterviewPhase.ready;
+      _safeNotify();
+    });
+    _wsClient!.reconnects.listen((_) {
+      if (sessionId != null) {
+        _wsClient!.sendMessage({
+          'type': 'session_reconnect',
+          'payload': {'sessionId': sessionId}
+        });
+      }
+    });
+  }
+
   void _safeNotify() {
+    if (!hasListeners) return;
     try {
       notifyListeners();
     } catch (e) {
-      debugPrint('Provider notifyListeners failed (likely disposed): $e');
+      debugPrint('Safe notify error: $e');
     }
   }
 
-
-  void resetForNewSession() {
-    isSessionEnded = false;
-    isConnecting = true;
-    _isCleanedUp = false;
-    _isStartingListening = false;
-    _isTurnLocked = false; // NEW
-    sessionId = null;
-    currentConceptId = null;
-    subtitleText = "";
-    isStreamingText = false;
-    finalTranscript = "";
-    partialTranscript = "";
-    questionText = "";
-    finalQuestionText = "";
-    transcript.clear();
-    currentPhase = InterviewPhase.ready;
-    currentTurnIndex = 0;
-    _silenceStrikes = 0;
-    errorMessage = null;
-    _wsClient.disconnect();
-    _safeNotify();
-  }
-
-
-  Future<void> initSession(String type, {String? resumeId, String? websiteUrl}) async {
-    // FULL RESET to prevent old session bleed
-    _cleanup();
-    _isCleanedUp = false;
-    _isStartingListening = false;
-    
-    isConnecting = true;
-    isSessionEnded = false;
-    _silenceStrikes = 0;
-    errorMessage = null;
-    assert(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO', 'Invalid moduleType');
-    moduleType = type;
-    
-    // RESET ALL TEXT
-    subtitleText = "";
-    isStreamingText = false;
-    finalTranscript = "";
-    partialTranscript = "";
-    questionText = "";
-    finalQuestionText = "";
-    transcript.clear();
-    currentConceptId = null;
-    currentPhase = InterviewPhase.ready;
-    currentTurnIndex = 0;
-
-    _safeNotify();
-
-    try {
-      // Get voice from settings
-      final prefs = await SharedPreferences.getInstance();
-      _voiceId = prefs.getString('selected_voice') ?? 'Tiffany';
-      _engine = prefs.getString('selected_engine') ?? 'generative';
-
-      // FIX 1: Request microphone permission EARLY (before any audio)
-      final sttReady = await _sttService.init();
-      if (!sttReady) {
-        errorMessage = "Microphone permission is required. Please enable it in app settings.";
-        isConnecting = false;
-        _safeNotify();
-        return;
-      }
-
-      final initPayload = {
-        'moduleType': type,
-        'voiceId': _voiceId,
-        'engine': _engine,
-        'force': true,
-      };
-      if (resumeId != null) {
-        initPayload['resumeId'] = resumeId;
-      }
-      if (websiteUrl != null) {
-        initPayload['websiteUrl'] = websiteUrl;
-      }
-
-      final response = await DioClient().dio.post(
-        ApiConstants.interviewInit,
-        data: initPayload,
-      );
-
-      sessionId = response.data['sessionId'];
-      // Use the wsUrl from the backend; fallback to .env WEBSOCKET_URL
-      final wsUrl = response.data['wsUrl'] ?? ApiConstants.websocketUrl;
-
-      // Get the real Firebase ID token for WebSocket authentication
-      final firebaseUser = FirebaseAuth.instance.currentUser;
-      final token = await firebaseUser?.getIdToken() ?? '';
-
-      await _connectWebSocket(wsUrl, token);
-    } catch (e) {
-      errorMessage = "Failed to initialize session: ${e.toString()}";
-      isConnecting = false;
-      _safeNotify();
-    }
-  }
-
-  StreamSubscription? _wsSubscription;
- 
-  Future<void> _connectWebSocket(String url, String token) async {
-    await _wsClient.connect(url, token);
-    
-    // Cancel existing subscription to prevent duplicate processing
-    await _wsSubscription?.cancel();
-    _wsSubscription = _wsClient.onMessage.listen(_handleIncomingMessage);
- 
-    // Wire up TTS completion: when all audio finishes playing, transition to listening.
-    // This is the SINGLE source of truth for enabling the mic — prevents race condition
-    // where mic enables while AI audio is still playing through the speaker.
-    _ttsService.onPlaybackComplete = () async => await onAudioPlaybackComplete();
-    // Store sessionId on WebSocket client for reconnection
-    _wsClient.setSessionId(sessionId);
-    startInterview();
-  }
-
-
-  void startInterview() {
-    _wsClient.send('session_init', {
-      'sessionId': sessionId,
-      'moduleType': moduleType,
-      'voiceId': _voiceId,
-      'engine': _engine,
-    });
-    isConnecting = false;
-    _isTurnLocked = true; // LOCK: wait for first turn_complete
-
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(minutes: 3), (timer) {
-      _wsClient.send('ping', {});
-    });
-
-    _safeNotify();
-  }
-
-  void _handleIncomingMessage(Map<String, dynamic> msg) {
-    final type = msg['type'];
-    final payload = msg['payload'];
-
-    switch (type) {
+  void _handleWebSocketMessage(Map<String, dynamic> message) {
+    switch (message['type']) {
       case 'turn_complete':
-        _isTurnLocked = false; // UNLOCK: server is ready for next turn
-        _watchdogTimer?.cancel();
-
-        final questionText = payload['questionText'] ?? '';
-        final audioData = payload['audioData'] ?? '';
-        final audioUrl = payload['audioUrl'] ?? '';
-
-        subtitleText = questionText;
-        finalQuestionText = questionText;
-        isStreamingText = false;
-
-        if (questionText.isNotEmpty && questionText != '...') {
-          transcript.add(TranscriptEntry(
-            role: 'ai',
-            text: questionText,
-            timestamp: DateTime.now(),
-          ));
-        }
-
-        if (payload['currentConceptId'] != null) {
-          currentConceptId = payload['currentConceptId'];
-        }
-
-        currentPhase = InterviewPhase.speaking;
-        _safeNotify();
-
-        if (audioUrl.isNotEmpty) {
-          _ttsService.playUrl(audioUrl);
-        } else if (audioData.isNotEmpty) {
-          _ttsService.playBase64(audioData);
-        } else {
-          onAudioPlaybackComplete();
-        }
+        _handleTurnComplete(message['payload']);
         break;
-
       case 'turn_error':
-        _isTurnLocked = false; // Unlock on error so user can retry
-        _watchdogTimer?.cancel();
-        errorMessage = payload['message'];
-        currentPhase = InterviewPhase.ready;
-        _safeNotify();
+        _handleTurnError(message['payload']);
         break;
-
       case 'termination':
-        isSessionEnded = true;
-        currentPhase = InterviewPhase.ready;
-        _cleanup();
+        _handleTermination();
+        break;
+      case 'error':
+        errorMessage = message['payload']['message'];
         _safeNotify();
         break;
     }
   }
 
-  Future<void> onAudioPlaybackComplete() async {
-    _watchdogTimer?.cancel();
-    // This is the SINGLE entry point for enabling the mic after AI finishes speaking.
-    // It fires only after ALL TTS audio chunks have been played through the speaker.
-    // Phase may be 'speaking' (normal) or 'listening' (if session_state_update arrived early).
-    if (!isSessionEnded && (currentPhase == InterviewPhase.speaking || currentPhase == InterviewPhase.listening)) {
-      currentPhase = InterviewPhase.listening;
-      isStreamingText = false;
-      subtitleText = finalQuestionText.isNotEmpty ? finalQuestionText : questionText;
+void _handleTurnComplete(Map<String, dynamic> payload) {
+    isStreamingText = false;
+    transcript.add(TranscriptEntry(role: 'AI', text: payload['questionText'], timestamp: DateTime.now()));
+    currentQuestion = payload['questionText'];
+    questionText = currentQuestion ?? "...";
+    finalQuestionText = questionText;
+    subtitleText = questionText;
+    audioUrl = payload['audioUrl'];
+    final audioData = payload['audioData'] as String?;
+    _currentPhase = InterviewPhase.speaking;
+    _safeNotify();
+
+    if (audioUrl?.isNotEmpty == true) {
+      _ttsService.playUrl(audioUrl!)
+          .timeout(const Duration(seconds: 60), onTimeout: () {
+        throw TimeoutException('Audio playback timed out');
+      })
+          .then((_) {
+        _currentPhase = InterviewPhase.listening;
+        _safeNotify();
+        _startListening();
+      })
+          .catchError((error) {
+        errorMessage = 'Audio playback failed: $error';
+        _currentPhase = InterviewPhase.listening;
+        debugPrint('TTS playback error: $error');
+        _safeNotify();
+        _startListening();
+      });
+    } else if (audioData != null && audioData.isNotEmpty) {
+      _ttsService.playBase64(audioData)
+          .timeout(const Duration(seconds: 60), onTimeout: () {
+        throw TimeoutException('Audio playback timed out');
+      })
+          .then((_) {
+        _currentPhase = InterviewPhase.listening;
+        _safeNotify();
+        _startListening();
+      })
+          .catchError((error) {
+        errorMessage = 'Audio playback failed: $error';
+        _currentPhase = InterviewPhase.error;
+        debugPrint('TTS playback error: $error');
+        _safeNotify();
+      });
+    } else {
+      // No audio available — still show question and allow user to respond
+      debugPrint('No audio available for question, proceeding to listening phase');
+      _currentPhase = InterviewPhase.listening;
       _safeNotify();
       _startListening();
     }
   }
 
-  void sendTextTranscript(String text) {
-    // HALF-DUPLEX GUARD: Cannot send while a turn is locked, AI is speaking, or session ended
-    if (_isTurnLocked || currentPhase == InterviewPhase.speaking || isSessionEnded) {
-      debugPrint('Blocked: turn locked, AI speaking, or session ended');
-      return;
-    }
-
-    _isTurnLocked = true; // LOCK until turn_complete arrives
-    currentPhase = InterviewPhase.processing;
-    _stopListening();
-
-    transcript.add(TranscriptEntry(
-      role: 'user',
-      text: text,
-      timestamp: DateTime.now(),
-    ));
-    finalTranscript = text;
-
-    _wsClient.send('turn_submit', {
-      'sessionId': sessionId,
-      'text': text,
-      'voiceId': _voiceId,
-      'engine': _engine,
-      if (currentConceptId != null) 'currentConceptId': currentConceptId,
-    });
-
-    _watchdogTimer?.cancel();
-    _watchdogTimer = Timer(const Duration(seconds: 60), () {
-      if (_isTurnLocked) {
-        _isTurnLocked = false;
-        errorMessage = 'Response timed out. Please try again.';
-        currentPhase = InterviewPhase.ready;
-        _safeNotify();
-      }
-    });
-
+  void _handleTermination() {
+    isSessionEnded = true;
+    _currentPhase = InterviewPhase.ready;
+    _cleanup();
     _safeNotify();
   }
 
+  void _handleTurnError(Map<String, dynamic> payload) {
+    errorMessage = payload['message'] ?? payload['error'] ?? 'Unknown error';
+    _currentPhase = InterviewPhase.error;
+    _safeNotify();
+  }
+
+  Timer? _safetyTimer;
+  
+  void _startListening() {
+    if (isListening) return;
+    
+    // Cancel any pending safety timer from previous turn
+    _safetyTimer?.cancel();
+    
+    isListening = true;
+    _sttService.startListening(
+      onPartial: (text) {
+        partialTranscript = text;
+        _safeNotify();
+      },
+      onFinal: (text) {
+        finalTranscript = text;
+        isListening = false;
+        _safetyTimer?.cancel(); // Cancel safety timer on successful completion
+        if (text.isEmpty) {
+          _silenceStrikes++;
+        } else {
+          _silenceStrikes = 0;
+        }
+        _submitResponse(text);
+        _safeNotify();
+      },
+    );
+
+    // Safety timeout - force submit if onFinal never fires
+    _safetyTimer = Timer(const Duration(seconds: 35), () {
+      if (isListening && !_sttService.isListening) {
+        // STT stopped without calling onFinal — force submit
+        debugPrint('STT timeout: forcing submit after silence');
+        isListening = false;
+        _submitResponse('');
+        _safeNotify();
+      }
+    });
+  }
+
+  void _submitResponse(String text) {
+    isStreamingText = true;
+    _currentPhase = InterviewPhase.processing;
+    _safeNotify();
+
+    transcript.add(TranscriptEntry(role: 'USER', text: text, timestamp: DateTime.now()));
+
+    _wsClient?.sendMessage({
+      'type': 'turn_submit',
+      'payload': {
+        'sessionId': sessionId,
+        'textTranscript': text,
+        'isSilence': text.isEmpty,
+        'voiceId': _selectedVoiceId,
+        'engine': _selectedEngine,
+      },
+    });
+  }
+
+  void terminateSession() {
+    _wsClient?.sendMessage({
+      'type': 'terminate_session',
+      'payload': {
+        'sessionId': sessionId,
+      },
+    });
+  }
+
+  // Additional methods for screen compatibility
+  void resetForNewSession() {
+    _cleanup();
+    isSessionEnded = false;
+    isConnecting = true;
+    sessionId = null;
+    subtitleText = "";
+    isStreamingText = false;
+    finalTranscript = "";
+    partialTranscript = "";
+    questionText = "";
+    finalQuestionText = "";
+    transcript.clear();
+    _currentPhase = InterviewPhase.ready;
+    _silenceStrikes = 0;
+    errorMessage = null;
+    _safeNotify();
+  }
+
+  Future<void> initSession(String type, {String? resumeId, String? websiteUrl}) async {
+    moduleType = type;
+    isConnecting = true;
+    _safeNotify();
+
+    await _sttService.init();
+    // Get the current user's Firebase ID token
+    final user = FirebaseAuth.instance.currentUser;
+    final idToken = await user?.getIdToken();
+
+    if (user == null || idToken == null) {
+      errorMessage = 'Authentication required. Please log in again.';
+      isConnecting = false;
+      _safeNotify();
+      return;
+    }
+
+    // Load voice preference from auth provider if not already set
+    try {
+      final authProvider = FirebaseAuth.instance.currentUser;
+      if (authProvider != null) {
+        // This would need to come from your auth/user model
+        // For now, use default unless user has explicitly set it
+      }
+    } catch (e) {
+      debugPrint('Could not load user voice preference: $e');
+    }
+
+    // Create a backend session before opening the websocket.
+    try {
+      final response = await DioClient().dio.post(ApiConstants.interviewInit, data: {
+        'moduleType': moduleType,
+        'voiceId': _selectedVoiceId,
+        'engine': _selectedEngine,
+        'resumeId': resumeId,
+        'websiteUrl': websiteUrl,
+      });
+
+      sessionId = response.data['sessionId']?.toString();
+      if (sessionId == null || sessionId!.isEmpty) {
+        throw Exception('Invalid sessionId returned from interview init');
+      }
+    } catch (e) {
+      // BUG-9 FIX: Handle 409 concurrent session response
+      if (e is DioException && e.response?.statusCode == 409) {
+        final activeSessionId = e.response?.data['activeSessionId']?.toString();
+        if (activeSessionId != null && activeSessionId.isNotEmpty) {
+          errorMessage = 'You have an active interview session. Reconnect to it?';
+          // Store the activeSessionId for potential reconnection
+          sessionId = activeSessionId;
+          isConnecting = false;
+          _safeNotify();
+          return;
+        }
+      }
+      errorMessage = 'Failed to initialize interview session: $e';
+      isConnecting = false;
+      _safeNotify();
+      return;
+    }
+
+    _wsClient = WebSocketClient(
+      url: ApiConstants.websocketUrl,
+      userId: user.uid,
+      sessionId: sessionId!,
+    );
+    _initWebSocket();
+
+    try {
+      await _wsClient!.connect(authToken: idToken);
+      await _wsClient!.waitForConnection();
+    } catch (e) {
+      errorMessage = 'Failed to connect: $e';
+      isConnecting = false;
+      _safeNotify();
+      return;
+    }
+
+    _wsClient!.sendMessage({
+      'type': 'session_init',
+      'payload': {
+        'sessionId': sessionId,
+        'moduleType': moduleType,
+        'voiceId': _selectedVoiceId,
+        'engine': _selectedEngine,
+        'resumeId': resumeId,
+        'websiteUrl': websiteUrl,
+      },
+    });
+    isConnecting = false;
+    _safeNotify();
+  }
+
+  // frontend/lib/features/interview/providers/interview_provider.dart (Around Line 248)
 
   Future<void> endSession() async {
     if (isSessionEnded) return;
-    
-    _wsClient.send('terminate_session', {
-      'sessionId': sessionId,
-    });
-    
+    final savedSessionId = sessionId;
+    terminateSession();
+    if(savedSessionId !=null){
+      try{
+        await DioClient().dio.post('${ApiConstants.interviewInit}/$savedSessionId/terminate');
+      }
+      catch(e){
+        debugPrint("REST terminate failed: $e");
+      }
+    }
+    await Future.delayed(const Duration(milliseconds: 300));
     isSessionEnded = true;
-    _cleanup();
-    
-    try {
-      notifyListeners();
-    } catch (e) {
-      debugPrint('endSession notifyListeners failed (likely disposed): $e');
-    }
-  }
-
-  void _startListening() async {
-    if (_isStartingListening || _isTurnLocked || isSessionEnded) {
-      _isStartingListening = false;
-      return;
-    }
-    _isStartingListening = true;
-    
-    try {
-      errorMessage = null; // Clear previous errors
-      isListening = true;
-      partialTranscript = "";
-      finalTranscript = "";
-      _resetSilenceTimer();
-      
-      _sttService.onStatusChange = (status) {
-        if (status == 'done' || status == 'notListening') {
-          if (isListening) {
-             debugPrint('STT native stop detected. Syncing state...');
-             isListening = false;
-             _safeNotify();
-          }
-        }
-      };
-      
-      // FIX: Ensure STT is ready
-      final ready = await _sttService.init();
-      if (!ready) {
-        errorMessage = "Microphone not available";
-        isListening = false;
-        _safeNotify();
-        return;
-      }
-      
-      _sttService.startListening(
-        onPartial: (text) {
-          if (currentPhase != InterviewPhase.listening) return;
-          partialTranscript = text;
-          _resetSilenceTimer();
-          _safeNotify();
-        },
-        onFinal: (text) {
-          // REMOVED: Phase guard to prevent dropping transcripts if state changed quickly
-          partialTranscript = "";
-          isListening = false;
-          _stopSilenceTimer();
-          sendTextTranscript(text);
-          _safeNotify();
-        },
-      );
-      _safeNotify();
-    } finally {
-      _isStartingListening = false;
-    }
-  }
-
-  void _stopListening() {
-    isListening = false;
-    _sttService.stop();
-    _stopSilenceTimer();
-    _safeNotify();
-  }
-
-  void _resetSilenceTimer() {
-    _silenceTimer?.cancel();
-    _silenceTimer = Timer(AppConstants.silenceTimeout, () {
-      if (isListening) {
-        _handleSilence();
-      }
-    });
-  }
-
-  void _stopSilenceTimer() {
-    _silenceTimer?.cancel();
-    _silenceTimer = null;
-  }
-
-  void _handleSilence() {
-    _silenceStrikes++;
-    if (_isTurnLocked) return; // Don't send if already processing
-
-    _isTurnLocked = true;
-    _stopListening();
-
-    _wsClient.send('turn_submit', {
-      'sessionId': sessionId,
-      'text': '',
-      'isSilence': true,
-      'silenceStrikes': _silenceStrikes,
-      'voiceId': _voiceId,
-      'engine': _engine,
-    });
-
-    _watchdogTimer?.cancel();
-    _watchdogTimer = Timer(const Duration(seconds: 30), () {
-      if (_isTurnLocked) {
-        _isTurnLocked = false;
-        _startListening();
-      }
-    });
+    resetForNewSession();
+    sessionId = savedSessionId;
 
     _safeNotify();
   }
 
   void _cleanup() {
-    if (_isCleanedUp) return;
-    _isCleanedUp = true;
-    _watchdogTimer?.cancel();
-    _heartbeatTimer?.cancel();
-    _stopListening();
+    _wsSubscription?.cancel();
+    _wsSubscription = null;
+    _sttService.stop();
     _ttsService.stop();
-    _stopSilenceTimer();
-    _wsClient.disconnect();
-    _isTurnLocked = false;
-    sessionId = null;
+    _wsClient?.disconnect();
+    _wsClient = null;
+  }
+
+  @override
+  void dispose() {
+    _cleanup();
+    super.dispose();
   }
 }

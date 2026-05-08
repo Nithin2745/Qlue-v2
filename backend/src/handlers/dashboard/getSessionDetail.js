@@ -6,6 +6,7 @@ const docClient = DynamoDBDocumentClient.from(client);
 
 const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'qlue-sessions';
 const FEEDBACK_TABLE = process.env.FEEDBACK_TABLE || 'qlue-feedback';
+const TRANSCRIPTS_TABLE = process.env.TRANSCRIPTS_TABLE || 'qlue-transcripts';
 
 /**
  * AWS Lambda Handler: GET /dashboard/session/{sessionId}
@@ -56,11 +57,25 @@ exports.handler = async (event) => {
         const feedbackRes = await docClient.send(feedbackCmd);
         const feedback = feedbackRes.Items?.[0] || null;
 
+        // 3. Get Transcript
+        const transcriptCmd = new QueryCommand({
+            TableName: TRANSCRIPTS_TABLE,
+            IndexName: 'GSI_SessionIdTurnIndex',
+            KeyConditionExpression: 'sessionId = :sid',
+            ExpressionAttributeValues: {
+                ':sid': sessionId
+            },
+            ScanIndexForward: true // Ascending by turnIndex
+        });
+        const transcriptRes = await docClient.send(transcriptCmd);
+        const transcript = transcriptRes.Items || [];
+
         return {
             statusCode: 200,
             body: JSON.stringify({
                 session,
-                feedback
+                feedback,
+                transcript
             })
         };
 

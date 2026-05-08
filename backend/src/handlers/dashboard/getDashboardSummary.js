@@ -5,6 +5,7 @@ const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1
 const docClient = DynamoDBDocumentClient.from(client);
 
 const FEEDBACK_TABLE = process.env.FEEDBACK_TABLE || 'qlue-feedback';
+const SESSIONS_TABLE = process.env.SESSIONS_TABLE_NAME || 'qlue-sessions';
 
 /**
  * Calculates a unified integer score from the accumulatedScores object.
