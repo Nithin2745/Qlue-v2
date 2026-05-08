@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:frontend/context/auth_provider.dart';
 import 'package:go_router/go_router.dart';
 import 'dot_matrix_painter.dart';
 import '../../core/theme.dart';
@@ -76,6 +77,10 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
       if (!(type == 'RESUME' || type == 'HR' || type == 'WEBSITE' || type == 'INTRO')) {
         throw ArgumentError('Invalid moduleType');
       }
+
+      // Fetch the auth provider to get the selected voice
+      final authProvider = context.read<AuthProvider>();
+      _provider.setVoice(authProvider.voiceId, engine: 'generative');
 
       _provider.initSession(
         type,
@@ -203,12 +208,16 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
     // Determine sphere color
     Color sphereColor;
+    bool isProcessing = provider.currentPhase == InterviewPhase.processing;
+    
     if (isConnecting) {
-      sphereColor = Colors.white;
+      sphereColor = Colors.white70; // Off-white glow
     } else if (isAiSpeaking) {
-      sphereColor = t.emeraldPrimary; // Blue-ish emerald when AI speaks
+      sphereColor = t.emeraldPrimary; // Green
     } else if (isListening) {
-      sphereColor = Colors.orangeAccent; // Orange when listening
+      sphereColor = Colors.orangeAccent; // Orange
+    } else if (isProcessing) {
+      sphereColor = t.primary; // Processing color (blue/purple)
     } else {
       sphereColor = Colors.white;
     }

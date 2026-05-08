@@ -134,9 +134,10 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
       })
           .catchError((error) {
         errorMessage = 'Audio playback failed: $error';
-        _currentPhase = InterviewPhase.error;
+        _currentPhase = InterviewPhase.listening;
         debugPrint('TTS playback error: $error');
         _safeNotify();
+        _startListening();
       });
     } else if (audioData != null && audioData.isNotEmpty) {
       _ttsService.playBase64(audioData)
@@ -280,6 +281,17 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
       return;
     }
 
+    // Load voice preference from auth provider if not already set
+    try {
+      final authProvider = FirebaseAuth.instance.currentUser;
+      if (authProvider != null) {
+        // This would need to come from your auth/user model
+        // For now, use default unless user has explicitly set it
+      }
+    } catch (e) {
+      debugPrint('Could not load user voice preference: $e');
+    }
+
     // Create a backend session before opening the websocket.
     try {
       final response = await DioClient().dio.post(ApiConstants.interviewInit, data: {
@@ -349,21 +361,19 @@ void _handleTurnComplete(Map<String, dynamic> payload) {
 
   Future<void> endSession() async {
     if (isSessionEnded) return;
-
-    // Save sessionId before resetForNewSession() clears it
     final savedSessionId = sessionId;
-    
     terminateSession();
-    
-    // FIX: Give the WebSocket 300ms to physically send the termination message 
-    // to AWS before we sever the connection.
+    if(savedSessionId !=null){
+      try{
+        await DioClient().dio.post('${ApiConstants.interviewInit}/$savedSessionId/terminate');
+      }
+      catch(e){
+        debugPrint("REST terminate failed: $e");
+      }
+    }
     await Future.delayed(const Duration(milliseconds: 300));
-
     isSessionEnded = true;
-    // resetForNewSession() already calls _cleanup() internally
     resetForNewSession();
-    
-    // Restore sessionId for navigation to feedback screen
     sessionId = savedSessionId;
 
     _safeNotify();

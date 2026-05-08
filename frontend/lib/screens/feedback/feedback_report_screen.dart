@@ -31,7 +31,7 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
     _fetchReport();
   }
 
-  Future<void> _fetchReport() async {
+  Future<void> _fetchReport({int retries = 5}) async {
     final sId = widget.session?.sessionId ?? widget.sessionId;
     if (sId == null) {
       setState(() {
@@ -46,7 +46,7 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
       final response = await DioClient().dio.get(
         '${ApiConstants.feedbackReport}/$sId',
       );
-      
+
       if (response.statusCode == 200) {
         final data = response.data;
         // The endpoint returns {session, feedback}
@@ -57,10 +57,16 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
             _isLoading = false;
           });
         } else {
-          setState(() {
-            _isLoading = false;
-            _errorMessage = "Feedback not yet generated. Please try again later.";
-          });
+          if (retries > 0) {
+            await Future.delayed(const Duration(seconds: 3));
+            if (mounted) _fetchReport(retries: retries - 1);
+          } else {
+            setState(() {
+              _isLoading = false;
+              _errorMessage =
+                  "Feedback not yet generated. Please try again later.";
+            });
+          }
         }
       } else {
         throw Exception("Failed to load report: ${response.statusCode}");
@@ -69,7 +75,8 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
       debugPrint("Error fetching feedback report: $e");
       setState(() {
         _isLoading = false;
-        _errorMessage = "Unable to load feedback at this time. It may still be generating.";
+        _errorMessage =
+            "Unable to load feedback at this time. It may still be generating.";
       });
     }
   }
@@ -86,14 +93,19 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           body: RepaintBoundary(
-            child: _isLoading 
-              ? const Center(child: CircularProgressIndicator())
-              : _errorMessage != null
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _errorMessage != null
                 ? _buildErrorState(context, t)
                 : Stack(
                     children: [
                       SingleChildScrollView(
-                        padding: EdgeInsets.only(top: topPadding + 20, bottom: 60, left: 24, right: 24),
+                        padding: EdgeInsets.only(
+                          top: topPadding + 20,
+                          bottom: 60,
+                          left: 24,
+                          right: 24,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
@@ -156,7 +168,9 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
               borderRadius: 12,
               padding: EdgeInsets.zero,
               hasMetallicBorder: true,
-              child: Center(child: Icon(FeatherIcons.chevronLeft, size: 20, color: t.text)),
+              child: Center(
+                child: Icon(FeatherIcons.chevronLeft, size: 20, color: t.text),
+              ),
             ),
           ),
         ),
@@ -200,7 +214,12 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
         children: [
           Text(
             "Overall Score",
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: t.textSecondary, letterSpacing: 2),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: t.textSecondary,
+              letterSpacing: 2,
+            ),
           ),
           const SizedBox(height: 12),
           Stack(
@@ -213,15 +232,19 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   boxShadow: [
-                    BoxShadow(color: t.primary.withValues(alpha: 0.3), blurRadius: 40, spreadRadius: 10),
+                    BoxShadow(
+                      color: t.primary.withValues(alpha: 0.3),
+                      blurRadius: 40,
+                      spreadRadius: 10,
+                    ),
                   ],
                 ),
               ),
               Text(
                 "$score",
                 style: TextStyle(
-                  fontSize: 72, 
-                  fontWeight: FontWeight.w900, 
+                  fontSize: 72,
+                  fontWeight: FontWeight.w900,
                   color: t.text,
                   height: 1.0,
                 ),
@@ -242,8 +265,14 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
                 Icon(FeatherIcons.trendingUp, size: 14, color: t.success),
                 const SizedBox(width: 6),
                 Text(
-                  score >= 80 ? "Top 15% of candidates" : "Great effort, keep practicing!",
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.success),
+                  score >= 80
+                      ? "Top 15% of candidates"
+                      : "Great effort, keep practicing!",
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: t.success,
+                  ),
                 ),
               ],
             ),
@@ -262,7 +291,11 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
         children: [
           Text(
             "Dimension Breakdown",
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: t.text),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: t.text,
+            ),
           ),
           const SizedBox(height: 30),
           Center(
@@ -272,8 +305,14 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
               child: CustomPaint(
                 painter: RadarChartPainter(
                   t: t,
-                  data: _report?.dimensionScores.values.map((v) => v / 100).toList() ?? [0.8, 0.7, 0.9],
-                  labels: _report?.dimensionScores.keys.toList() ?? ["Clarity", "Fluency", "Vocabulary"],
+                  data:
+                      _report?.dimensionScores.values
+                          .map((v) => v / 100)
+                          .toList() ??
+                      [0.8, 0.7, 0.9],
+                  labels:
+                      _report?.dimensionScores.keys.toList() ??
+                      ["Clarity", "Fluency", "Vocabulary"],
                 ),
               ),
             ),
@@ -297,9 +336,11 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
             AnimatedAlign(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutQuart,
-              alignment: _activeTabIndex == 0 
-                  ? Alignment.centerLeft 
-                  : (_activeTabIndex == 1 ? Alignment.center : Alignment.centerRight),
+              alignment: _activeTabIndex == 0
+                  ? Alignment.centerLeft
+                  : (_activeTabIndex == 1
+                        ? Alignment.center
+                        : Alignment.centerRight),
               child: FractionallySizedBox(
                 widthFactor: 0.33,
                 child: Container(
@@ -307,7 +348,11 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
                     color: t.primary,
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
-                      BoxShadow(color: t.primary.withValues(alpha: 0.4), blurRadius: 12, spreadRadius: 1)
+                      BoxShadow(
+                        color: t.primary.withValues(alpha: 0.4),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                      ),
                     ],
                   ),
                 ),
@@ -366,8 +411,13 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
             _buildSectionTitle(t, "Executive Summary", FeatherIcons.fileText),
             const SizedBox(height: 16),
             Text(
-              _report?.executiveSummary ?? "Your performance report is being processed.",
-              style: TextStyle(fontSize: 15, height: 1.6, color: t.textSecondary),
+              _report?.executiveSummary ??
+                  "Your performance report is being processed.",
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.6,
+                color: t.textSecondary,
+              ),
             ),
             const SizedBox(height: 20),
             _buildMetricRow(t, "Confidence Level", "High", t.primary),
@@ -382,9 +432,16 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
             _buildSectionTitle(t, "Your Strengths", FeatherIcons.zap),
             const SizedBox(height: 16),
             if (_report?.strengths.isEmpty ?? true)
-              _buildBulletPoint(t, "Great effort in completing the session.", t.success)
+              _buildBulletPoint(
+                t,
+                "Great effort in completing the session.",
+                t.success,
+              )
             else
-              ...(_report?.strengths.map((s) => _buildBulletPoint(t, s, t.success)) ?? []),
+              ...(_report?.strengths.map(
+                    (s) => _buildBulletPoint(t, s, t.success),
+                  ) ??
+                  []),
           ],
         );
       case 2: // Weaknesses
@@ -392,12 +449,19 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
           key: const ValueKey("weaknesses"),
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildSectionTitle(t, "Areas for Improvement", FeatherIcons.alertCircle),
+            _buildSectionTitle(
+              t,
+              "Areas for Improvement",
+              FeatherIcons.alertCircle,
+            ),
             const SizedBox(height: 16),
             if (_report?.weaknesses.isEmpty ?? true)
               _buildBulletPoint(t, "No major weaknesses identified.", t.warning)
             else
-              ...(_report?.weaknesses.map((w) => _buildBulletPoint(t, w, t.warning)) ?? []),
+              ...(_report?.weaknesses.map(
+                    (w) => _buildBulletPoint(t, w, t.warning),
+                  ) ??
+                  []),
           ],
         );
       default:
@@ -408,7 +472,7 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
   Widget _buildTranscriptSection(AppThemeColors t) {
     // Use transcript from report if available, otherwise show message
     final transcript = _report?.transcript ?? [];
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -436,8 +500,16 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (transcript.indexOf(item) > 0)
-                          const Divider(height: 48, thickness: 1, color: Colors.white12),
-                        _buildTranscriptItem(t, isAI ? "Q: ${item.text}" : "A: ${item.text}", isAI),
+                          const Divider(
+                            height: 48,
+                            thickness: 1,
+                            color: Colors.white12,
+                          ),
+                        _buildTranscriptItem(
+                          t,
+                          isAI ? "Q: ${item.text}" : "A: ${item.text}",
+                          isAI,
+                        ),
                       ],
                     );
                   }).toList(),
@@ -460,11 +532,7 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
         Expanded(
           child: Text(
             text,
-            style: TextStyle(
-              color: t.text,
-              height: 1.5,
-              fontSize: 14,
-            ),
+            style: TextStyle(color: t.text, height: 1.5, fontSize: 14),
           ),
         ),
       ],
@@ -476,19 +544,34 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
       children: [
         Icon(icon, size: 20, color: t.primary),
         const SizedBox(width: 10),
-        Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: t.text)),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: t.text,
+          ),
+        ),
       ],
     );
   }
 
-  Widget _buildMetricRow(AppThemeColors t, String label, String value, Color color) {
+  Widget _buildMetricRow(
+    AppThemeColors t,
+    String label,
+    String value,
+    Color color,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: TextStyle(color: t.textSecondary)),
-          Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: color)),
+          Text(
+            value,
+            style: TextStyle(fontWeight: FontWeight.bold, color: color),
+          ),
         ],
       ),
     );
@@ -507,20 +590,18 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
             decoration: BoxDecoration(shape: BoxShape.circle, color: color),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(text, style: TextStyle(fontSize: 14, color: t.textSecondary, height: 1.4))),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 14,
+                color: t.textSecondary,
+                height: 1.4,
+              ),
+            ),
+          ),
         ],
       ),
-    );
-  }
-
-  Widget _buildTranscriptItem(AppThemeColors t, String question, String answer) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(question, style: TextStyle(fontWeight: FontWeight.bold, color: t.text)),
-        const SizedBox(height: 8),
-        Text(answer, style: TextStyle(color: t.textSecondary, fontStyle: FontStyle.italic)),
-      ],
     );
   }
 }
@@ -530,7 +611,11 @@ class RadarChartPainter extends CustomPainter {
   final List<double> data; // values 0.0 to 1.0
   final List<String> labels;
 
-  RadarChartPainter({required this.t, required this.data, required this.labels});
+  RadarChartPainter({
+    required this.t,
+    required this.data,
+    required this.labels,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -545,48 +630,67 @@ class RadarChartPainter extends CustomPainter {
       ..strokeWidth = 1.0;
 
     for (var i = 1; i <= 4; i++) {
-        final r = radius * (i / 4);
-        final path = Path();
-        for (var j = 0; j < data.length; j++) {
-           final angle = j * angleStep - (pi / 2);
-           final point = Offset(center.dx + r * cos(angle), center.dy + r * sin(angle));
-           if (j == 0) {
-             path.moveTo(point.dx, point.dy);
-           } else {
-             path.lineTo(point.dx, point.dy);
-           }
+      final r = radius * (i / 4);
+      final path = Path();
+      for (var j = 0; j < data.length; j++) {
+        final angle = j * angleStep - (pi / 2);
+        final point = Offset(
+          center.dx + r * cos(angle),
+          center.dy + r * sin(angle),
+        );
+        if (j == 0) {
+          path.moveTo(point.dx, point.dy);
+        } else {
+          path.lineTo(point.dx, point.dy);
         }
-        path.close();
-        canvas.drawPath(path, gridPaint);
+      }
+      path.close();
+      canvas.drawPath(path, gridPaint);
     }
 
     // 2. Draw Axis Lines
     for (var i = 0; i < data.length; i++) {
-       final angle = i * angleStep - (pi / 2);
-       canvas.drawLine(center, Offset(center.dx + radius * cos(angle), center.dy + radius * sin(angle)), gridPaint);
-       
-       // Labels
-       final labelOffset = Offset(center.dx + (radius + 20) * cos(angle), center.dy + (radius + 15) * sin(angle));
-       _drawText(canvas, labels[i], labelOffset, t);
+      final angle = i * angleStep - (pi / 2);
+      canvas.drawLine(
+        center,
+        Offset(
+          center.dx + radius * cos(angle),
+          center.dy + radius * sin(angle),
+        ),
+        gridPaint,
+      );
+
+      // Labels
+      final labelOffset = Offset(
+        center.dx + (radius + 20) * cos(angle),
+        center.dy + (radius + 15) * sin(angle),
+      );
+      _drawText(canvas, labels[i], labelOffset, t);
     }
 
     // 3. Draw Data Polygon
     final dataPath = Path();
     for (var i = 0; i < data.length; i++) {
-       final r = radius * data[i];
-       final angle = i * angleStep - (pi / 2);
-       final point = Offset(center.dx + r * cos(angle), center.dy + r * sin(angle));
-       if (i == 0) {
-         dataPath.moveTo(point.dx, point.dy);
-       } else {
-         dataPath.lineTo(point.dx, point.dy);
-       }
+      final r = radius * data[i];
+      final angle = i * angleStep - (pi / 2);
+      final point = Offset(
+        center.dx + r * cos(angle),
+        center.dy + r * sin(angle),
+      );
+      if (i == 0) {
+        dataPath.moveTo(point.dx, point.dy);
+      } else {
+        dataPath.lineTo(point.dx, point.dy);
+      }
     }
     dataPath.close();
 
     final fillPaint = Paint()
       ..shader = RadialGradient(
-        colors: [t.primary.withValues(alpha: 0.4), t.primary.withValues(alpha: 0.1)],
+        colors: [
+          t.primary.withValues(alpha: 0.4),
+          t.primary.withValues(alpha: 0.1),
+        ],
       ).createShader(Rect.fromCircle(center: center, radius: radius))
       ..style = PaintingStyle.fill;
 
@@ -598,24 +702,43 @@ class RadarChartPainter extends CustomPainter {
 
     canvas.drawPath(dataPath, fillPaint);
     canvas.drawPath(dataPath, outlinePaint);
-    
+
     // Draw dots at vertices
-    final dotPaint = Paint()..color = t.primary..style = PaintingStyle.fill;
+    final dotPaint = Paint()
+      ..color = t.primary
+      ..style = PaintingStyle.fill;
     for (var i = 0; i < data.length; i++) {
-       final r = radius * data[i];
-       final angle = i * angleStep - (pi / 2);
-       canvas.drawCircle(Offset(center.dx + r * cos(angle), center.dy + r * sin(angle)), 4, dotPaint);
+      final r = radius * data[i];
+      final angle = i * angleStep - (pi / 2);
+      canvas.drawCircle(
+        Offset(center.dx + r * cos(angle), center.dy + r * sin(angle)),
+        4,
+        dotPaint,
+      );
     }
   }
 
   void _drawText(Canvas canvas, String text, Offset offset, AppThemeColors t) {
-    final span = TextSpan(style: TextStyle(color: t.textSecondary, fontSize: 11, fontWeight: FontWeight.bold), text: text);
-    final tp = TextPainter(text: span, textAlign: TextAlign.center, textDirection: TextDirection.ltr);
+    final span = TextSpan(
+      style: TextStyle(
+        color: t.textSecondary,
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+      ),
+      text: text,
+    );
+    final tp = TextPainter(
+      text: span,
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
     tp.layout();
     tp.paint(canvas, offset - Offset(tp.width / 2, tp.height / 2));
   }
 
   @override
   bool shouldRepaint(covariant RadarChartPainter oldDelegate) =>
-      oldDelegate.data != data || oldDelegate.labels != labels || oldDelegate.t != t;
+      oldDelegate.data != data ||
+      oldDelegate.labels != labels ||
+      oldDelegate.t != t;
 }

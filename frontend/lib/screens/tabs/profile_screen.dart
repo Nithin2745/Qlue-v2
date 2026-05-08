@@ -70,7 +70,7 @@ class SettingRow extends StatelessWidget {
               ),
               const Spacer(),
               if (right != null)
-                right!
+                Expanded(child: Align(alignment: Alignment.centerRight, child: right!))
               else if (onPress != null && !destructive)
                 Icon(FeatherIcons.chevronRight, size: 16, color: t.textTertiary),
             ],

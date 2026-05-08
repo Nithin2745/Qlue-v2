@@ -61,6 +61,10 @@ class AiDotMatrixPainter extends CustomPainter {
              }
           }
 
+          if (intensity > 0.0 && !isInwards && baseColor != Colors.green) { 
+             state += (math.Random().nextDouble() * 0.15); 
+          }          
+
           // INTERACTIVE TAP RIPPLE - Snappy Hardware Response
           if (tapOffset != null) {
              final double duration = 0.8; // Shorter, more professional burst
