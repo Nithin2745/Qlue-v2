@@ -41,6 +41,34 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
   late InterviewProvider _provider;
   late VoidCallback _providerListener;
 
+  Timer? _statusTimer;
+  int _messageIndex = 0;
+
+  List<String> get _loadingMessages {
+    switch (widget.moduleType) {
+      case 'RESUME':
+        return ["Analyzing your resume...", "Scanning key skills and experience...", "Preparing personalized questions..."];
+      case 'WEBSITE':
+        return ["Analyzing the study material...", "Extracting key concepts...", "Preparing tutor session..."];
+      case 'INTRO':
+        return ["Analyzing communication style...", "Preparing introduction assessment...", "Calibrating evaluation criteria..."];
+      case 'HR':
+      default:
+        return ["Analyzing behavioral patterns...", "Calibrating question difficulty...", "Preparing situational scenarios..."];
+    }
+  }
+
+  void _startStatusTimer() {
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (mounted) {
+        setState(() {
+          _messageIndex = (_messageIndex + 1) % _loadingMessages.length;
+        });
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +97,12 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     _providerListener = () {
       if (mounted) {
         _simulateIntensity(_provider.currentPhase);
+        if (_provider.isConnecting && _statusTimer == null) {
+          _startStatusTimer();
+        } else if (!_provider.isConnecting && _statusTimer != null) {
+          _statusTimer?.cancel();
+          _statusTimer = null;
+        }
       }
     };
     _provider.addListener(_providerListener);
@@ -150,6 +184,7 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
 
   @override
   void dispose() {
+    _statusTimer?.cancel();
     _isDisposed = true; // FE-BUG #17 FIX: flag before cancelling controllers
     _provider.removeListener(_providerListener);
     _animationController.dispose();
@@ -181,15 +216,46 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
     }
 
     // Determine status text for bottom
-    String statusText = "";
+    Widget statusWidget = const SizedBox.shrink();
     if (isConnecting) {
-      statusText = "Establishing connection...";
-    } else if (isAiSpeaking && provider.isStreamingText) {
-      statusText = "Qlue is thinking...";
-    } else if (isAiSpeaking) {
-      statusText = "Qlue is speaking...";
-    } else if (isListening) {
-      statusText = provider.silenceStrikes > 0 ? "Waiting for your response..." : "Listening...";
+      statusWidget = AnimatedSwitcher(
+        duration: const Duration(milliseconds: 500),
+        transitionBuilder: (Widget child, Animation<double> animation) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+        child: Text(
+          _loadingMessages[_messageIndex],
+          key: ValueKey<int>(_messageIndex),
+          style: TextStyle(
+            fontSize: 12,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w700,
+            color: Colors.white.withValues(alpha: 0.4),
+            letterSpacing: 2,
+          ),
+        ),
+      );
+    } else {
+      String statusText = "";
+      if (isAiSpeaking && provider.isStreamingText) {
+        statusText = "Qlue is thinking...";
+      } else if (isAiSpeaking) {
+        statusText = "Qlue is speaking...";
+      } else if (isListening) {
+        statusText = provider.silenceStrikes > 0 ? "Waiting for your response..." : "Listening...";
+      }
+      if (statusText.isNotEmpty) {
+        statusWidget = Text(
+          statusText,
+          style: TextStyle(
+            fontSize: 12,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w700,
+            color: Colors.white.withValues(alpha: 0.4),
+            letterSpacing: 2,
+          ),
+        );
+      }
     }
 
     // Determine AI text to show at top
@@ -381,20 +447,10 @@ class _InterviewSessionScreenState extends State<InterviewSessionScreen> with Ti
                     ),
  
                   // STATUS TEXT (BOTTOM)
-                  if (statusText.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 24, top: 8),
-                      child: Text(
-                        statusText,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white.withValues(alpha: 0.4),
-                          letterSpacing: 2,
-                        ),
-                      ),
-                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 24, top: 8),
+                    child: statusWidget,
+                  ),
  
                   // SILENCE STRIKES INDICATOR
                   if (provider.silenceStrikes > 0)
