@@ -8,8 +8,8 @@ const VOICE_PERSONA_MAP = {
   'Tiffany': 'Emma',
   'Ruth': 'Rachel',
   'Joanna': 'Sarah',
-  'Matthew': '',
-  'Stephen': 'Chris',
+  'Matthew': 'Chris',
+  'Stephen': 'Steve',
 };
 
 function getAiPersona(voiceId) {
