@@ -15,7 +15,7 @@ class DashboardApiService {
     return RadarData.fromJson(response.data);
   }
 
-  Future<List<SessionModel>> getHistory({String? moduleType, int limit = 20}) async {
+  Future<List<SessionModel>> getHistory({String? moduleType, int limit = 100}) async {
     final response = await _dio.get('/dashboard/history', queryParameters: {
       if (moduleType != null) 'moduleType': moduleType,
       'limit': limit,
