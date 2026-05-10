@@ -90,6 +90,27 @@ function formatConversationHistory(transcripts, aiName = 'AI') {
 // =============================================================================
 // INTERVIEW PROMPT BUILDER
 // =============================================================================
+
+const EXIT_INTENT_PATTERNS = [
+    /\bthank\s+(you|u)\b.*\b(interview|time|opportunity|chat|talk)\b/i,
+    /\bthat\'?s?\s+(it|all|everything)\b/i,
+    /\b(i\'?m?\s+)?done\b/i,
+    /\b(i\s+)?(have\s+)?(to\s+)?go\b/i,
+    /\bend\s+(the\s+)?interview\b/i,
+    /\bwrap\s+(it\s+)?up\b/i,
+    /\bno\s+(more\s+)?questions\b/i,
+    /\b(i\s+)?(think\s+)?(we\'?re?\s+)?(good|finished|complete)\b/i,
+    /\bappreciate\s+(your\s+)?time\b/i,
+    /\bhave\s+a\s+(good|great)\s+day\b/i,
+    /\bgoodbye\b/i,
+    /\bbye\b/i
+];
+
+function checkExitIntent(transcript) {
+    if (!transcript) return false;
+    return EXIT_INTENT_PATTERNS.some(pattern => pattern.test(transcript));
+}
+
 function buildInterviewPrompt(resumeData, turnIndex, conversationHistory = [], moduleType = 'RESUME', aiName = 'Emma') {
   const summary = extractResumeSummary(resumeData);
   const historyText = formatConversationHistory(conversationHistory, aiName);
@@ -107,9 +128,7 @@ function buildInterviewPrompt(resumeData, turnIndex, conversationHistory = [], m
   const lastCandidateMessage = conversationHistory
     .filter(t => t.speaker !== 'AI')
     .pop();
-  const exitPhrases = ['thank you', 'i\'m done', 'that\'s all', 'no more', 'goodbye', 'bye', 'end'];
-  const wantsToExit = lastCandidateMessage &&
-    exitPhrases.some(p => lastCandidateMessage.text?.toLowerCase().includes(p));
+  const wantsToExit = lastCandidateMessage && checkExitIntent(lastCandidateMessage.text);
 
   if (wantsToExit) {
     return `You are ${aiName}, a warm, cheerful, and professional interviewer from Qlue.
@@ -122,6 +141,7 @@ The candidate seems ready to end the interview. Give a brief, warm wrap-up:
 - Mention one specific thing you loved about the conversation
 - Wish them well with a cheerful tone
 - Keep it under 30 words
+- NEVER use emojis.
 
 Respond with ONLY what ${aiName} says. No labels, no JSON.`;
   }
@@ -141,6 +161,8 @@ ${isFirstTurn ? `- Start with an energetic, warm greeting like "Hi, I'm ${aiName
 - MUST reference SPECIFIC details from their resume or past answers.
 - Keep your entire response under 35 words.
 - Be warm, conversational, and engaged.
+- NEVER use emojis.
+- ALWAYS format your response clearly as a short conversational acknowledgment followed by the question.
 
 Respond with ONLY what ${aiName} says. No labels, no JSON.`;
 }
@@ -166,6 +188,8 @@ ${isFirstTurn ? '- Start with a very energetic, welcoming greeting.' : '- Act li
 - If they answered correctly: praise them enthusiastically and ask a progressively harder follow-up question related to the content.
 - Teach one small, focused concept at a time based on the website content.
 - Keep under 45 words. Be encouraging, fun, and warm.
+- NEVER use emojis.
+- ALWAYS format your response clearly as an evaluation/feedback followed by the follow-up question.
 
 Respond with ONLY what ${aiName} says. No labels, no JSON.`;
 }
@@ -201,6 +225,8 @@ ${isFirstTurn ? '- Start with an incredibly warm, friendly greeting to put them 
 - Base your follow-up on their previous answer if possible.
 - Keep the vibe conversational, fun, and not like a rigid checklist.
 - Keep under 35 words.
+- NEVER use emojis.
+- ALWAYS format your response clearly as a short acknowledgment followed by the behavioral question.
 
 Respond with ONLY what ${aiName} says. No labels, no JSON.`;
 }
@@ -224,7 +250,9 @@ ${isFirstTurn
       ? '- Act like a real mentor. Carefully analyze their introduction. Give them a highly efficient, constructive tip on how to improve it, suggest missing key points, or praise a strong intro. Then, ask ONE follow-up question based on what they said.' 
       : '- Continue naturally. Dig deeper into a specific interest or experience they mentioned with genuine curiosity.')}
 - Be incredibly supportive, constructive, and fun.
-- Keep under 50 words so you have enough room to give great feedback.
+- Keep under 35 words. Give extremely concise feedback.
+- NEVER use emojis.
+- ALWAYS format your response clearly as your feedback/acknowledgment followed immediately by the follow-up question.
 
 Respond with ONLY what ${aiName} says. No labels, no JSON.`;
 }
@@ -247,6 +275,11 @@ function cleanAIResponse(rawText) {
     // Not JSON
   }
 
+  // If the AI split it with '||' we just join it with a space or break
+  if (cleaned.includes('||')) {
+    cleaned = cleaned.split('||').map(s => s.trim()).join(' ');
+  }
+
   cleaned = cleaned
     .replace(/^Emma:\s*/i, '')
     .replace(/^Interviewer:\s*/i, '')
@@ -260,7 +293,7 @@ function cleanAIResponse(rawText) {
   cleaned = cleaned
     .replace(/\s*\([^)]*\)\s*/g, ' ')
     .replace(/\s*\[[^\]]*\]\s*/g, ' ')
-    .replace(/\s*{[^}]*}\s*/g, ' ');
+    .replace(/\s*\{[^}]*\}\s*/g, ' ');
 
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
 

@@ -24,20 +24,78 @@ class Avatar extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget imageWidget;
     
+    // Default widget to use when an image fails to load
+    Widget errorWidget = Icon(Icons.sentiment_satisfied_alt, size: size * 0.6, color: Colors.white);
+
     if (imageUrl != null && imageUrl!.isNotEmpty) {
       if (imageUrl!.startsWith('http') || imageUrl!.startsWith('https')) {
-        imageWidget = Image.network(imageUrl!, fit: BoxFit.cover, width: size, height: size);
+        imageWidget = Image.network(
+          imageUrl!,
+          fit: BoxFit.cover,
+          width: size,
+          height: size,
+          errorBuilder: (context, error, stackTrace) => Container(
+            color: const Color(0xFF7C3AED),
+            width: size,
+            height: size,
+            child: Center(child: errorWidget),
+          ),
+        );
       } else if (!kIsWeb && (imageUrl!.startsWith('/') || (imageUrl!.length > 1 && imageUrl![1] == ':'))) {
-        imageWidget = Image.file(File(imageUrl!), fit: BoxFit.cover, width: size, height: size);
+        imageWidget = Image.file(
+          File(imageUrl!),
+          fit: BoxFit.cover,
+          width: size,
+          height: size,
+          errorBuilder: (context, error, stackTrace) => Container(
+            color: const Color(0xFF7C3AED),
+            width: size,
+            height: size,
+            child: Center(child: errorWidget),
+          ),
+        );
       } else if (!kIsWeb) {
-        imageWidget = Image.file(File(imageUrl!), fit: BoxFit.cover, width: size, height: size);
+        imageWidget = Image.file(
+          File(imageUrl!),
+          fit: BoxFit.cover,
+          width: size,
+          height: size,
+          errorBuilder: (context, error, stackTrace) => Container(
+            color: const Color(0xFF7C3AED),
+            width: size,
+            height: size,
+            child: Center(child: errorWidget),
+          ),
+        );
       } else {
         // Web fallback
-        imageWidget = Image.network("https://ui-avatars.com/api/?name=${name ?? 'User'}&background=random&color=fff&size=256", fit: BoxFit.cover, width: size, height: size);
+        imageWidget = Image.network(
+          "https://ui-avatars.com/api/?name=${name ?? 'User'}&background=random&color=fff&size=256",
+          fit: BoxFit.cover,
+          width: size,
+          height: size,
+          errorBuilder: (context, error, stackTrace) => Container(
+            color: const Color(0xFF7C3AED),
+            width: size,
+            height: size,
+            child: Center(child: errorWidget),
+          ),
+        );
       }
     } else {
       // Default: Dynamic Letter Avatar
-      imageWidget = Image.network("https://ui-avatars.com/api/?name=${name ?? 'User'}&background=7C3AED&color=fff&size=256", fit: BoxFit.cover, width: size, height: size);
+      imageWidget = Image.network(
+        "https://ui-avatars.com/api/?name=${name ?? 'User'}&background=7C3AED&color=fff&size=256",
+        fit: BoxFit.cover,
+        width: size,
+        height: size,
+        errorBuilder: (context, error, stackTrace) => Container(
+          color: const Color(0xFF7C3AED),
+          width: size,
+          height: size,
+          child: Center(child: errorWidget),
+        ),
+      );
     }
 
     return Container(
