@@ -64,14 +64,71 @@ CustomTransitionPage _buildSlideTransitionPage({
   );
 }
 
+class _SplashScreen extends StatefulWidget {
+  const _SplashScreen();
+
+  @override
+  State<_SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<_SplashScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _animation = Tween<double>(begin: 0.5, end: 1.0).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    ));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
+        child: FadeTransition(
+          opacity: _animation,
+          child: const Text(
+            "Qlue AI",
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+              letterSpacing: 2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 GoRouter buildAppRouter(AuthProvider authProvider) {
   return GoRouter(
-    initialLocation: '/login',
+    initialLocation: '/splash',
     refreshListenable: authProvider,
     redirect: (context, state) {
+      if (authProvider.isInitializing) {
+        return state.matchedLocation == '/splash' ? null : '/splash';
+      }
+
       final isAuthenticated = authProvider.isAuthenticated;
       final isAuthPage = state.matchedLocation == '/login' || 
-                         state.matchedLocation == '/register';
+                         state.matchedLocation == '/register' ||
+                         state.matchedLocation == '/splash';
 
       if (!isAuthenticated && !isAuthPage) {
         return '/login';
@@ -84,7 +141,10 @@ GoRouter buildAppRouter(AuthProvider authProvider) {
       return null;
     },
     routes: [
-
+      GoRoute(
+        path: '/splash',
+        builder: (context, state) => const _SplashScreen(),
+      ),
       GoRoute(
         path: '/login',
         builder: (context, state) => const ExactLoginScreen(),
