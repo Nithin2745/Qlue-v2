@@ -36,21 +36,24 @@ class _ExactLoginScreenState extends State<ExactLoginScreen> {
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       await authProvider.login(_email.trim(), _password);
-      
+
       if (mounted) {
-        if (authProvider.currentUser != null && !authProvider.currentUser!.emailVerified) {
-           setState(() {
-             _error = "EMAIL_NOT_VERIFIED";
-             _loading = false;
-           });
-           return;
+        if (authProvider.currentUser != null &&
+            !authProvider.currentUser!.emailVerified) {
+          setState(() {
+            _error = "EMAIL_NOT_VERIFIED";
+            _loading = false;
+          });
+          return;
         }
         context.go('/dashboard');
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString().contains('user-not-found') || e.toString().contains('wrong-password')
+          _error =
+              e.toString().contains('user-not-found') ||
+                  e.toString().contains('wrong-password')
               ? "Incorrect email or password."
               : "An error occurred. Please try again.";
           _loading = false;
@@ -71,7 +74,10 @@ class _ExactLoginScreenState extends State<ExactLoginScreen> {
       _googleLoading = true;
     });
     try {
-      await Provider.of<AuthProvider>(context, listen: false).signInWithGoogle();
+      await Provider.of<AuthProvider>(
+        context,
+        listen: false,
+      ).signInWithGoogle();
       if (mounted) context.go('/dashboard');
     } catch (e) {
       if (mounted) setState(() => _error = "Google Sign-In failed.");
@@ -92,7 +98,6 @@ class _ExactLoginScreenState extends State<ExactLoginScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Column(
               children: [
-                // const Spacer(flex: 1),
                 const SizedBox(height: 75),
                 // Premium Typography Logo
                 Center(
@@ -100,7 +105,10 @@ class _ExactLoginScreenState extends State<ExactLoginScreen> {
                     children: [
                       ShaderMask(
                         shaderCallback: (bounds) => LinearGradient(
-                          colors: [Colors.white, Colors.white.withValues(alpha: 0.7)],
+                          colors: [
+                            Colors.white,
+                            Colors.white.withValues(alpha: 0.7),
+                          ],
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                         ).createShader(bounds),
@@ -188,16 +196,24 @@ class _ExactLoginScreenState extends State<ExactLoginScreen> {
                             vertical: 8,
                           ),
                           decoration: BoxDecoration(
-                            color: _error == "EMAIL_NOT_VERIFIED" ? Colors.orange.withValues(alpha: 0.1) : t.error.withValues(alpha: 0.1),
+                            color: _error == "EMAIL_NOT_VERIFIED"
+                                ? Colors.orange.withValues(alpha: 0.1)
+                                : t.error.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: _error == "EMAIL_NOT_VERIFIED" ? Colors.orange.withValues(alpha: 0.2) : t.error.withValues(alpha: 0.2)),
+                            border: Border.all(
+                              color: _error == "EMAIL_NOT_VERIFIED"
+                                  ? Colors.orange.withValues(alpha: 0.2)
+                                  : t.error.withValues(alpha: 0.2),
+                            ),
                           ),
                           child: Text(
-                            _error == "EMAIL_NOT_VERIFIED" 
-                              ? "Please verify your email address before logging in. Check your inbox for the link!"
-                              : _error,
+                            _error == "EMAIL_NOT_VERIFIED"
+                                ? "Please verify your email address before logging in. Check your inbox for the link!"
+                                : _error,
                             style: TextStyle(
-                              color: _error == "EMAIL_NOT_VERIFIED" ? Colors.orange : t.error,
+                              color: _error == "EMAIL_NOT_VERIFIED"
+                                  ? Colors.orange
+                                  : t.error,
                               fontSize: 12,
                               fontWeight: FontWeight.w500,
                             ),
