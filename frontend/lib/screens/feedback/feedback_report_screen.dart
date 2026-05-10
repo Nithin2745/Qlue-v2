@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:feather_icons/feather_icons.dart';
@@ -25,13 +27,40 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
   String? _errorMessage;
   FeedbackReportModel? _report;
 
+  Timer? _loadingTimer;
+  int _loadingTextIndex = 0;
+  final List<String> _loadingPhrases = [
+    "Analyzing your transcription...",
+    "Evaluating core dimensions...",
+    "Cross-referencing behavioral patterns...",
+    "Synthesizing actionable feedback...",
+    "Finalizing comprehensive report...",
+  ];
+
   @override
   void initState() {
     super.initState();
+    _startLoadingAnimation();
     _fetchReport();
   }
 
-  Future<void> _fetchReport({int retries = 5}) async {
+  @override
+  void dispose() {
+    _loadingTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startLoadingAnimation() {
+    _loadingTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (mounted && _isLoading) {
+        setState(() {
+          _loadingTextIndex = (_loadingTextIndex + 1) % _loadingPhrases.length;
+        });
+      }
+    });
+  }
+
+  Future<void> _fetchReport({int retries = 20}) async {
     final sId = widget.session?.sessionId ?? widget.sessionId;
     if (sId == null) {
       setState(() {
@@ -42,16 +71,26 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
     }
 
     try {
+      // FE-BUG FIX: Add cache-buster to prevent browser from caching the GET request during polling
+      final cacheBuster = DateTime.now().millisecondsSinceEpoch;
       // Use /dashboard/session/{sessionId} which returns both session and feedback data
       final response = await DioClient().dio.get(
-        '${ApiConstants.feedbackReport}/$sId',
+        '${ApiConstants.feedbackReport}/$sId?_t=$cacheBuster',
       );
 
       if (response.statusCode == 200) {
-        final data = response.data;
-        // The endpoint returns {session, feedback}
+        // FE-BUG FIX: Ensure data is parsed correctly even if API Gateway returns text/plain
+        final rawData = response.data;
+        final data = rawData is String ? jsonDecode(rawData) : rawData;
+        
+        // The endpoint returns {session, feedback, transcript}
         final feedbackData = data['feedback'];
         if (feedbackData != null) {
+          // FE-BUG FIX: Inject transcript into feedbackData so the model parser can find it
+          if (data['transcript'] != null) {
+            feedbackData['transcript'] = data['transcript'];
+          }
+          
           setState(() {
             _report = FeedbackReportModel.fromJson(feedbackData);
             _isLoading = false;
@@ -64,7 +103,7 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
             setState(() {
               _isLoading = false;
               _errorMessage =
-                  "Feedback not yet generated. Please try again later.";
+                  "Feedback generation is taking longer than expected. Please check back later.";
             });
           }
         }
@@ -73,11 +112,17 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
       }
     } catch (e) {
       debugPrint("Error fetching feedback report: $e");
-      setState(() {
-        _isLoading = false;
-        _errorMessage =
-            "Unable to load feedback at this time. It may still be generating.";
-      });
+      if (retries > 0) {
+        // Continue retrying even if there's an API error, as it might be a transient failure
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) _fetchReport(retries: retries - 1);
+      } else {
+        setState(() {
+          _isLoading = false;
+          _errorMessage =
+              "Unable to load feedback at this time. It may still be generating.";
+        });
+      }
     }
   }
 
@@ -94,7 +139,7 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
           backgroundColor: Colors.transparent,
           body: RepaintBoundary(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
+                ? _buildLoadingState(context, t)
                 : _errorMessage != null
                 ? _buildErrorState(context, t)
                 : Stack(
@@ -126,6 +171,62 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
                     ],
                   ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingState(BuildContext context, AppThemeColors t) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 64,
+              height: 64,
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(t.primary),
+                strokeWidth: 3,
+              ),
+            ),
+            const SizedBox(height: 32),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 500),
+              transitionBuilder: (Widget child, Animation<double> animation) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0.0, 0.2),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: Text(
+                _loadingPhrases[_loadingTextIndex],
+                key: ValueKey<int>(_loadingTextIndex),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: t.text,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "This usually takes 15-30 seconds",
+              style: TextStyle(
+                color: t.textSecondary,
+                fontSize: 14,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -283,6 +384,27 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
   }
 
   Widget _buildSpiderChartCard(AppThemeColors t) {
+    // Ensure we specifically have exactly 3 items to draw a triangle
+    List<double> finalData = [0.8, 0.7, 0.9];
+    List<String> finalLabels = ["Clarity", "Fluency", "Vocabulary"];
+
+    if (_report != null && _report!.dimensionScores.isNotEmpty) {
+      final entries = _report!.dimensionScores.entries.toList();
+      if (entries.length >= 3) {
+        // Take first 3 entries
+        finalData = entries.take(3).map((e) => e.value / 100).toList();
+        finalLabels = entries.take(3).map((e) => e.key).toList();
+      } else {
+        // Pad with default data if less than 3
+        finalData = entries.map((e) => e.value / 100).toList();
+        finalLabels = entries.map((e) => e.key).toList();
+        while (finalData.length < 3) {
+          finalData.add(0.8);
+          finalLabels.add("Metric ${finalData.length}");
+        }
+      }
+    }
+
     return GlassCard(
       padding: const EdgeInsets.all(24),
       borderRadius: 24,
@@ -305,14 +427,8 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
               child: CustomPaint(
                 painter: RadarChartPainter(
                   t: t,
-                  data:
-                      _report?.dimensionScores.values
-                          .map((v) => v / 100)
-                          .toList() ??
-                      [0.8, 0.7, 0.9],
-                  labels:
-                      _report?.dimensionScores.keys.toList() ??
-                      ["Clarity", "Fluency", "Vocabulary"],
+                  data: finalData,
+                  labels: finalLabels,
                 ),
               ),
             ),
@@ -501,13 +617,13 @@ class _FeedbackReportScreenState extends State<FeedbackReportScreen> {
                       children: [
                         if (transcript.indexOf(item) > 0)
                           const Divider(
-                            height: 48,
+                            height: 24,
                             thickness: 1,
                             color: Colors.white12,
                           ),
                         _buildTranscriptItem(
                           t,
-                          isAI ? "Q: ${item.text}" : "A: ${item.text}",
+                          isAI ? "AI: ${item.text}" : "You: ${item.text}",
                           isAI,
                         ),
                       ],

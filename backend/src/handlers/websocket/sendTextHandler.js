@@ -1,35 +1,13 @@
-const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
-const { getTranscriptBySession } = require('../../models/transcript');
+const { getTranscriptBySession, getLatestTranscripts } = require('../../models/transcript');
 const { deregisterConnection } = require('../../lib/websocket');
 const { docClient } = require('../../lib/dynamodb');
 
 const sqsClient = new SQSClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const ASYNC_QUEUE_URL = process.env.ASYNC_QUEUE_URL;
 const WS_CONNECTIONS_TABLE = process.env.WS_CONNECTIONS_TABLE;
-
-const apigwClient = new ApiGatewayManagementApiClient({
-  endpoint: process.env.WEBSOCKET_ENDPOINT?.replace('wss://', 'https://') || ''
-});
-
-async function postToConnection(connectionId, data) {
-  try {
-    await apigwClient.send(new PostToConnectionCommand({
-      ConnectionId: connectionId,
-      Data: Buffer.from(JSON.stringify(data))
-    }));
-    return true;
-  } catch (error) {
-    if (error.$metadata?.httpStatusCode === 410 || error.name === 'GoneException') {
-      console.warn(`Connection ${connectionId} is stale`);
-      await deregisterConnection(connectionId);
-      throw new Error('StaleConnectionError');
-    }
-    throw error;
-  }
-}
 
 async function sendError(connectionId, message, code = 400) {
   try {
@@ -64,9 +42,8 @@ async function updateConnectionHeartbeat(connectionId) {
 
 async function getLastAiTurnIndex(sessionId, sessionTurnCount = 0) {
   try {
-    const transcripts = await getTranscriptBySession(sessionId);
-    for (let i = transcripts.length - 1; i >= 0; i--) {
-      const item = transcripts[i];
+    const transcripts = await getLatestTranscripts(sessionId, 5);
+    for (const item of transcripts) {
       if (item.speaker === 'AI') {
         return Number(item.turnIndex) || 0;
       }
@@ -132,6 +109,7 @@ async function handleSessionInit(connectionId, body, userId) {
       MessageBody: JSON.stringify({
         connectionId,
         sessionId,
+        userId,   // BE-BUG #17 FIX: pass userId so asyncWorker can call handlers with ownership context
         action: 'session_init',
         voiceId: finalVoiceId,
         engine: finalEngine

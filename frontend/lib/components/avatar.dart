@@ -22,27 +22,23 @@ class Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ImageProvider image;
+    Widget imageWidget;
     
     if (imageUrl != null && imageUrl!.isNotEmpty) {
       if (imageUrl!.startsWith('http') || imageUrl!.startsWith('https')) {
-        image = NetworkImage(imageUrl!);
+        imageWidget = Image.network(imageUrl!, fit: BoxFit.cover, width: size, height: size);
       } else if (!kIsWeb && (imageUrl!.startsWith('/') || (imageUrl!.length > 1 && imageUrl![1] == ':'))) {
-        image = FileImage(File(imageUrl!));
+        imageWidget = Image.file(File(imageUrl!), fit: BoxFit.cover, width: size, height: size);
       } else if (!kIsWeb) {
-        image = FileImage(File(imageUrl!));
+        imageWidget = Image.file(File(imageUrl!), fit: BoxFit.cover, width: size, height: size);
       } else {
-        // Web fallback: Use letter avatar if URL detection fails or it's a local path string on web
-        image = NetworkImage("https://ui-avatars.com/api/?name=${name ?? 'User'}&background=random&color=fff&size=256");
+        // Web fallback
+        imageWidget = Image.network("https://ui-avatars.com/api/?name=${name ?? 'User'}&background=random&color=fff&size=256", fit: BoxFit.cover, width: size, height: size);
       }
     } else {
       // Default: Dynamic Letter Avatar
-      image = NetworkImage("https://ui-avatars.com/api/?name=${name ?? 'User'}&background=7C3AED&color=fff&size=256");
+      imageWidget = Image.network("https://ui-avatars.com/api/?name=${name ?? 'User'}&background=7C3AED&color=fff&size=256", fit: BoxFit.cover, width: size, height: size);
     }
-
-    // Optimization: Resize image before decoding to save memory
-    final int cacheSize = (size * 3).toInt();
-    image = ResizeImage.resizeIfNeeded(cacheSize, null, image);
 
     return Container(
       width: size,
@@ -51,11 +47,9 @@ class Avatar extends StatelessWidget {
         shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
         borderRadius: isCircle ? null : BorderRadius.circular(borderRadius),
         border: border,
-        image: DecorationImage(
-          image: image,
-          fit: BoxFit.cover,
-        ),
       ),
+      clipBehavior: Clip.antiAlias,
+      child: imageWidget,
     );
   }
 }
