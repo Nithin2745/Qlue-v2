@@ -1,4 +1,5 @@
-const { handler: generateQuestion, cleanAIResponse } = require('./generateQuestion');
+const { handler: generateQuestion } = require('./generateQuestion');
+const { cleanAIResponse } = require('../../lib/promptUtils');
 const { synthesizeSpeech } = require('../../lib/polly');
 const { getSession, getSessionById, updateSessionState, INTERVIEW_STATES } = require('../../models/session');
 const { saveTranscript, getTranscriptBySession } = require('../../models/transcript');

@@ -125,6 +125,7 @@ async function invokeModelStream(modelId, params, onToken) {
 
 /**
  * Builds the system prompt for Interview Modes (RESUME, HR, SELF_INTRO)
+ * Note: These are for evaluation/streaming scenarios, distinct from the plain-text voice prompts in promptUtils.js
  */
 function buildInterviewPrompt(context, history, turnCount, moduleType) {
   let systemContent = "";
